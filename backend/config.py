@@ -1,0 +1,24 @@
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=(".env", "../.env"),
+        extra="ignore",
+    )
+
+    vllm_smart_url: str = "http://localhost:8001/v1"
+    vllm_fast_url: str = "http://localhost:8002/v1"
+    vllm_smart_model: str = "Qwen2.5-7B-Instruct"
+    vllm_fast_model: str = "Phi-3.5-mini-instruct"
+    storage_dir: str = "storage"
+    public_base_url: str = "http://localhost:8100"
+    cors_origins: str = "http://localhost:3000"
+    max_tool_iterations: int = 5
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+
+settings = Settings()

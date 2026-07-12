@@ -1,0 +1,77 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Proyecto configurable — cada uno tiene su contexto y tools
+model Project {
+  id           String   @id @default(cuid())
+  name         String
+  description  String?
+  systemPrompt String   @map("system_prompt") @db.Text
+  contextJson  Json?    @map("context_json")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  tools         Tool[]
+  conversations Conversation[]
+
+  @@map("projects")
+}
+
+/// Herramienta que el LLM puede invocar
+model Tool {
+  id          String @id @default(cuid())
+  projectId   String @map("project_id")
+  project     Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name        String
+  description String @db.Text
+  parameters  Json
+  handlerKey  String @map("handler_key")
+  isActive    Boolean @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@unique([projectId, name])
+  @@index([projectId])
+  @@map("tools")
+}
+
+model Conversation {
+  id        String   @id @default(cuid())
+  projectId String   @map("project_id")
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title     String   @default("Nueva conversación")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  messages Message[]
+
+  @@index([projectId])
+  @@map("conversations")
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  TOOL
+  SYSTEM
+}
+
+model Message {
+  id             String      @id @default(cuid())
+  conversationId String      @map("conversation_id")
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           MessageRole
+  content        String      @db.Text
+  toolName       String?     @map("tool_name")
+  toolCallId     String?     @map("tool_call_id")
+  metadata       Json?
+  createdAt      DateTime    @default(now()) @map("created_at")
+
+  @@index([conversationId])
+  @@map("messages")
+}
