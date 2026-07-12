@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from config import settings
 from services.agent import run_agent
-from tools.registry import TOOL_HANDLERS
+from tools.registry import TOOL_HANDLERS, TOOL_CATALOG
 
 app = FastAPI(title="GPTEnterprice Agent API", version="0.1.0")
 
@@ -45,8 +45,11 @@ def health() -> dict[str, str]:
 
 
 @app.get("/tools")
-def list_tools() -> dict[str, list[str]]:
-    return {"handlers": sorted(TOOL_HANDLERS.keys())}
+def list_tools() -> dict[str, list]:
+    return {
+        "handlers": sorted(TOOL_HANDLERS.keys()),
+        "catalog": TOOL_CATALOG,
+    }
 
 
 @app.post("/chat", response_model=ChatResponse)

@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     db_password: str = ""
     db_name: str = "gptenterprice"
     db_schema: str = "gptenterprice"
+    salescloser_schema: str = "public"
     database_url: str | None = None
 
     vllm_smart_url: str = "http://localhost:8001/v1"
@@ -34,6 +35,20 @@ class Settings(BaseSettings):
         password = quote_plus(self.db_password)
         user = quote_plus(self.db_user)
         return f"postgresql://{user}:{password}@{self.db_host}:{self.db_port}/{self.db_name}?schema={self.db_schema}"
+
+    @property
+    def salescloser_dsn(self) -> str:
+        """DSN para tablas de Qontrol/SalesCloser en schema public."""
+        if self.database_url and "schema=" not in self.database_url:
+            return self.database_url
+
+        password = quote_plus(self.db_password)
+        user = quote_plus(self.db_user)
+        options = f"-c search_path={self.salescloser_schema}"
+        return (
+            f"postgresql://{user}:{password}@{self.db_host}:{self.db_port}/"
+            f"{self.db_name}?options={quote_plus(options)}"
+        )
 
     @property
     def cors_origin_list(self) -> list[str]:

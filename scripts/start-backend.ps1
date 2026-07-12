@@ -8,15 +8,27 @@ $Backend = Join-Path $Root "backend"
 
 Push-Location $Backend
 try {
-    if (-not (Test-Path ".venv")) {
-        Write-Host "Creando entorno virtual Python..." -ForegroundColor Cyan
+    $venvPython = $null
+    foreach ($candidate in @(".venv", "ServerVisor")) {
+        $pythonPath = Join-Path $Backend "$candidate\Scripts\python.exe"
+        if (Test-Path $pythonPath) {
+            $venvPython = $pythonPath
+            break
+        }
+    }
+
+    if (-not $venvPython) {
+        Write-Host "Creando entorno virtual .venv..." -ForegroundColor Cyan
         python -m venv .venv
-        .\.venv\Scripts\pip install -r requirements.txt
+        $venvPython = Join-Path $Backend ".venv\Scripts\python.exe"
+        & $venvPython -m pip install -r requirements.txt
     }
 
     Copy-Item (Join-Path $Root ".env") (Join-Path $Backend ".env") -ErrorAction SilentlyContinue
-    Write-Host "Iniciando FastAPI en puerto $Port..." -ForegroundColor Green
-    .\.venv\Scripts\python -m uvicorn main:app --reload --host 0.0.0.0 --port $Port
+    Write-Host "Iniciando FastAPI Agent en http://localhost:$Port" -ForegroundColor Green
+    Write-Host "Health: http://localhost:$Port/health" -ForegroundColor DarkGray
+    Write-Host "Tools:  http://localhost:$Port/tools" -ForegroundColor DarkGray
+    & $venvPython -m uvicorn main:app --reload --host 0.0.0.0 --port $Port
 }
 finally {
     Pop-Location

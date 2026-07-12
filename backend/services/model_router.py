@@ -17,10 +17,18 @@ TOOL_KEYWORDS = (
     "entrada",
     "llegó",
     "llego",
-    "hora",
-    "entre",
-    "desde",
-    "hasta",
+    "llamada",
+    "llamadas",
+    "transcripcion",
+    "transcripción",
+    "campana",
+    "campaña",
+    "escalacion",
+    "escalación",
+    "evaluacion",
+    "evaluación",
+    "compliance",
+    "score",
 )
 
 

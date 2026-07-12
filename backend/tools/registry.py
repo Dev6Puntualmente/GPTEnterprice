@@ -150,9 +150,35 @@ def buscar_usuario(query: str, fecha: str) -> dict[str, Any]:
     }
 
 
+from tools.salescloser import (
+    buscar_llamadas,
+    listar_campanas,
+    listar_escalaciones,
+    obtener_transcripcion_llamada,
+    reporte_llamadas_excel,
+    resumen_evaluacion_llamada,
+)
+
 TOOL_HANDLERS = {
     "generar_reporte_excel": generar_reporte_excel,
     "buscar_usuario": buscar_usuario,
+    "listar_campanas": listar_campanas,
+    "buscar_llamadas": buscar_llamadas,
+    "obtener_transcripcion_llamada": obtener_transcripcion_llamada,
+    "resumen_evaluacion_llamada": resumen_evaluacion_llamada,
+    "reporte_llamadas_excel": reporte_llamadas_excel,
+    "listar_escalaciones": listar_escalaciones,
+}
+
+TOOL_CATALOG = {
+    "generar_reporte_excel": "Demo RRHH — Excel de usuarios por rango horario",
+    "buscar_usuario": "Demo RRHH — Buscar hora de entrada de un usuario",
+    "listar_campanas": "SalesCloser — Listar campañas activas",
+    "buscar_llamadas": "SalesCloser — Buscar llamadas por fecha, campaña o cliente",
+    "obtener_transcripcion_llamada": "SalesCloser — Obtener transcripción de una llamada",
+    "resumen_evaluacion_llamada": "SalesCloser — Score y evaluación IA de una llamada",
+    "reporte_llamadas_excel": "SalesCloser — Exportar llamadas a Excel",
+    "listar_escalaciones": "SalesCloser — Ver escalaciones por estado",
 }
 
 

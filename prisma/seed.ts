@@ -118,6 +118,132 @@ async function main() {
   console.log(`Admin: ${admin.email}`);
   console.log(`Password demo: ${password}`);
   console.log(`Proyecto demo: ${project.name} (${project.id})`);
+
+  const salesCloserContext = {
+    nombre: "SalesCloser AI",
+    tablas: {
+      calls: ["id", "customer_name", "agent_id", "campaign_id", "created_at"],
+      call_transcripts: ["call_id", "content"],
+      call_evaluations: ["call_id", "compliance_score", "data"],
+      campaigns: ["id", "name", "is_active"],
+      escalations: ["id", "call_id", "status", "level", "reason"],
+    },
+    funciones_disponibles: [
+      "listar_campanas",
+      "buscar_llamadas",
+      "obtener_transcripcion_llamada",
+      "resumen_evaluacion_llamada",
+      "reporte_llamadas_excel",
+      "listar_escalaciones",
+    ],
+  };
+
+  const salesCloserPrompt = `Eres un asistente interno de SalesCloser / Qontrol.
+Respondes en español. Ayudas a supervisores y operadores a consultar llamadas, campañas, transcripciones, evaluaciones y escalaciones.
+
+Usa las herramientas disponibles para consultas de datos reales. Nunca inventes IDs ni scores.
+Si generas un Excel, incluye el enlace de descarga en tu respuesta.`;
+
+  const salesProject = await prisma.project.upsert({
+    where: { id: "demo-salescloser" },
+    update: {
+      ownerId: admin.id,
+      name: "SalesCloser AI",
+      description: "Consultas de llamadas, campañas, transcripciones y evaluaciones",
+      systemPrompt: salesCloserPrompt,
+      contextJson: salesCloserContext,
+    },
+    create: {
+      id: "demo-salescloser",
+      ownerId: admin.id,
+      name: "SalesCloser AI",
+      description: "Consultas de llamadas, campañas, transcripciones y evaluaciones",
+      systemPrompt: salesCloserPrompt,
+      contextJson: salesCloserContext,
+      tools: {
+        create: [
+          {
+            name: "listar_campanas",
+            description: "Lista campañas activas o todas las campañas del sistema",
+            handlerKey: "listar_campanas",
+            parameters: {
+              type: "object",
+              properties: {
+                solo_activas: { type: "boolean", description: "Si true, solo campañas activas" },
+              },
+            },
+          },
+          {
+            name: "buscar_llamadas",
+            description: "Busca llamadas por rango de fechas, nombre de campaña o cliente",
+            handlerKey: "buscar_llamadas",
+            parameters: {
+              type: "object",
+              properties: {
+                fecha_inicio: { type: "string", description: "YYYY-MM-DD" },
+                fecha_fin: { type: "string", description: "YYYY-MM-DD" },
+                campana: { type: "string", description: "Nombre parcial de campaña" },
+                cliente: { type: "string", description: "Nombre parcial del cliente" },
+                limite: { type: "number", description: "Máximo de resultados (default 20)" },
+              },
+            },
+          },
+          {
+            name: "obtener_transcripcion_llamada",
+            description: "Obtiene la transcripción de una llamada por su ID",
+            handlerKey: "obtener_transcripcion_llamada",
+            parameters: {
+              type: "object",
+              properties: {
+                call_id: { type: "number", description: "ID numérico de la llamada" },
+              },
+              required: ["call_id"],
+            },
+          },
+          {
+            name: "resumen_evaluacion_llamada",
+            description: "Obtiene score de compliance y evaluación IA de una llamada",
+            handlerKey: "resumen_evaluacion_llamada",
+            parameters: {
+              type: "object",
+              properties: {
+                call_id: { type: "number", description: "ID numérico de la llamada" },
+              },
+              required: ["call_id"],
+            },
+          },
+          {
+            name: "reporte_llamadas_excel",
+            description: "Genera Excel con llamadas en un rango de fechas",
+            handlerKey: "reporte_llamadas_excel",
+            parameters: {
+              type: "object",
+              properties: {
+                fecha_inicio: { type: "string", description: "YYYY-MM-DD" },
+                fecha_fin: { type: "string", description: "YYYY-MM-DD" },
+                campana: { type: "string", description: "Filtrar por campaña (opcional)" },
+              },
+              required: ["fecha_inicio", "fecha_fin"],
+            },
+          },
+          {
+            name: "listar_escalaciones",
+            description: "Lista escalaciones por estado (PENDING, RESOLVED, etc.)",
+            handlerKey: "listar_escalaciones",
+            parameters: {
+              type: "object",
+              properties: {
+                estado: { type: "string", description: "Estado de escalación. Default PENDING" },
+                limite: { type: "number", description: "Máximo de resultados" },
+              },
+            },
+          },
+        ],
+      },
+    },
+  });
+
+  console.log(`Proyecto SalesCloser: ${salesProject.name} (${salesProject.id})`);
 }
 
 main()
