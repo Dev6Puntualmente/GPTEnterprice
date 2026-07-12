@@ -2,6 +2,7 @@ import { MessageRole, Prisma } from "@/generated/prisma/client";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/require-auth";
+import { buildDateContext } from "@/lib/chat-intent";
 import { getAgentApiUrl } from "@/lib/env";
 import { resolveUserLlmEndpoint } from "@/lib/server-config-access";
 import type { ChatResponse, ToolDefinition } from "@/lib/types";
@@ -123,10 +124,10 @@ export async function POST(request: Request) {
   const contextBlock = conversation.project.contextJson
     ? `\n\nContexto del proyecto:\n${JSON.stringify(conversation.project.contextJson, null, 2)}`
     : "";
-
-  const llmEndpoint = await resolveUserLlmEndpoint(session.user.id);
+  const dateContext = buildDateContext();
   const agentApiUrl = getAgentApiUrl();
   const chatUrl = `${agentApiUrl}/chat`;
+  const llmEndpoint = await resolveUserLlmEndpoint(session.user.id);
 
   let agentResponse: Response;
   try {
@@ -136,7 +137,7 @@ export async function POST(request: Request) {
       headers: { "Content-Type": "application/json" },
       signal: AbortSignal.timeout(90_000),
       body: JSON.stringify({
-        system_prompt: `${conversation.project.systemPrompt}${contextBlock}`,
+        system_prompt: `${conversation.project.systemPrompt}\n\n${dateContext}${contextBlock}`,
         messages: toAgentMessages(history),
         tools: toOpenAiTools(conversation.project.tools),
         vllm: llmEndpoint
@@ -172,7 +173,9 @@ export async function POST(request: Request) {
     );
   }
 
-  const agentData = (await agentResponse.json()) as ChatResponse;
+  const agentData = (await agentResponse.json()) as ChatResponse & {
+    pending_job?: ChatResponse["pending_job"];
+  };
 
   if (agentData.tool_calls?.length) {
     for (const toolCall of agentData.tool_calls) {
@@ -196,8 +199,12 @@ export async function POST(request: Request) {
       role: MessageRole.ASSISTANT,
       content: agentData.message,
       metadata: {
-        model_used: agentData.model_used,
+        model_used: agentData.pending_job ? "worker" : agentData.model_used,
         files: agentData.files ?? [],
+        pending_job: agentData.pending_job ?? undefined,
+        job_status: agentData.pending_job?.status,
+        job_progress: agentData.pending_job?.progress,
+        job_stage: agentData.pending_job?.stage,
       } as Prisma.InputJsonValue,
     },
   });
@@ -210,8 +217,10 @@ export async function POST(request: Request) {
   return NextResponse.json({
     conversationId: conversation.id,
     message: assistantMessage,
-    modelUsed: agentData.model_used,
+    modelUsed: agentData.pending_job ? "worker" : agentData.model_used,
     toolCalls: agentData.tool_calls,
     files: agentData.files,
+    pendingJob: agentData.pending_job ?? null,
+    agentApiUrl,
   });
 }

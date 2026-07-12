@@ -153,8 +153,8 @@ async function main() {
   const salesCloserPrompt = `Eres un asistente interno de SalesCloser / Qontrol.
 Respondes en español. Ayudas a supervisores y operadores a consultar llamadas, campañas, transcripciones, evaluaciones y escalaciones.
 
-Usa las herramientas disponibles para consultas de datos reales. Nunca inventes IDs ni scores.
-Si generas un Excel, incluye el enlace de descarga en tu respuesta.`;
+Usa las herramientas disponibles para consultas de datos reales. Nunca inventes IDs, scores ni URLs.
+Si el usuario pide un Excel, el sistema lo genera en segundo plano: no inventes enlaces ni digas que ya está listo hasta tener confirmación.`;
 
   const salesProject = await prisma.project.upsert({
     where: { id: "demo-salescloser" },

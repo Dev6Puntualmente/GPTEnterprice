@@ -29,4 +29,34 @@ export type ChatResponse = {
     result: string;
   }>;
   files?: string[];
+  pending_job?: BackgroundJobSnapshot;
+};
+
+export type BackgroundJobSnapshot = {
+  id: string;
+  tool: string;
+  label: string;
+  status: "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED";
+  progress?: number;
+  stage?: string;
+};
+
+export type BackgroundJob = BackgroundJobSnapshot & {
+  args?: Record<string, unknown>;
+  result?: {
+    url?: string;
+    archivo?: string;
+    total_llamadas?: number;
+    mensaje?: string;
+  };
+  error?: string | null;
+};
+
+export type MessageMetadata = {
+  model_used?: string;
+  files?: string[];
+  pending_job?: BackgroundJobSnapshot;
+  job_status?: BackgroundJobSnapshot["status"];
+  job_progress?: number;
+  job_stage?: string;
 };

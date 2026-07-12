@@ -1,4 +1,4 @@
-from urllib.parse import quote_plus
+from urllib.parse import quote, quote_plus
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -45,10 +45,11 @@ class Settings(BaseSettings):
 
         password = quote_plus(self.db_password)
         user = quote_plus(self.db_user)
-        options = f"-c search_path={self.salescloser_schema}"
+        # quote (no quote_plus): libpq no decodifica '+' como espacio
+        options = quote(f"-c search_path={self.salescloser_schema}")
         return (
             f"postgresql://{user}:{password}@{self.db_host}:{self.db_port}/"
-            f"{self.db_name}?options={quote_plus(options)}"
+            f"{self.db_name}?options={options}"
         )
 
     @property

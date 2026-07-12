@@ -8,6 +8,8 @@ export const config = {
     "/login",
     "/register",
     "/api/chat/:path*",
+    "/api/jobs/:path*",
+    "/api/messages/:path*",
     "/api/conversations/:path*",
     "/api/projects/:path*",
     "/api/ai-servers/:path*",

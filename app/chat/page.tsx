@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { ChatWindow } from "@/app/components/ChatWindow";
+import GlassButton from "@/app/components/ui/GlassButton";
 import GlassCard from "@/app/components/ui/GlassCard";
 import ThemeToggle from "@/app/components/theme/ThemeToggle";
 import { useTheme } from "@/app/components/theme/ThemeProvider";
@@ -62,7 +63,7 @@ export default function ChatPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
+      <div className="flex h-screen items-center justify-center">
         <motion.div
           animate={{ opacity: [0.4, 1, 0.4] }}
           transition={{ duration: 1.4, repeat: Infinity }}
@@ -77,29 +78,33 @@ export default function ChatPage() {
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
 
   return (
-    <div className="min-h-screen p-4 md:p-6">
-      <div className="mx-auto grid min-h-[calc(100vh-3rem)] max-w-7xl grid-cols-1 gap-4 lg:grid-cols-[300px_1fr]">
-        <GlassCard className="flex flex-col p-4">
-          <div className="mb-4 flex items-start justify-between">
+    <div className="h-screen overflow-hidden p-3 md:p-5">
+      <div className="mx-auto grid h-full max-w-7xl grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[290px_1fr]">
+        <GlassCard className="flex min-h-0 flex-col overflow-hidden p-4 md:p-5">
+          <div className="mb-5 flex items-start justify-between gap-3">
             <div>
-              <p className="text-[10px] uppercase tracking-[0.2em]" style={{ color: colors.textMuted }}>
+              <p className="text-[10px] uppercase tracking-[0.24em]" style={{ color: colors.textMuted }}>
                 GPTEnterprice
               </p>
-              <h1 className="text-lg font-bold" style={{ color: colors.text }}>
+              <h1 className="text-xl font-semibold tracking-tight" style={{ color: colors.text }}>
                 Agente interno
               </h1>
             </div>
             <ThemeToggle />
           </div>
 
-          <label className="mb-1 block text-xs font-medium uppercase tracking-wide" style={{ color: colors.textMuted }}>
+          <label className="mb-2 block text-[11px] font-medium uppercase tracking-[0.18em]" style={{ color: colors.textMuted }}>
             Proyecto
           </label>
           <select
             value={selectedProjectId ?? ""}
             onChange={(e) => setSelectedProjectId(e.target.value)}
-            className="mb-3 w-full rounded-xl border px-3 py-2 text-sm backdrop-blur-md"
-            style={{ borderColor: colors.border, background: colors.panelAlt, color: colors.text }}
+            className="mb-4 w-full rounded-2xl border px-3 py-2.5 text-sm backdrop-blur-md outline-none"
+            style={{
+              borderColor: colors.border,
+              background: "rgba(255,255,255,0.05)",
+              color: colors.text,
+            }}
           >
             {projects.map((project) => (
               <option key={project.id} value={project.id}>
@@ -109,67 +114,74 @@ export default function ChatPage() {
           </select>
 
           {selectedProject ? (
-            <div className="mb-4 rounded-xl p-3 text-sm" style={{ background: colors.panelAlt, color: colors.textSoft }}>
+            <div
+              className="mb-4 rounded-2xl p-3 text-sm backdrop-blur-md"
+              style={{
+                background: "rgba(255,255,255,0.05)",
+                color: colors.textSoft,
+                border: `1px solid ${colors.border}`,
+              }}
+            >
               <p>{selectedProject.description}</p>
-              <p className="mt-1 text-xs" style={{ color: colors.textMuted }}>
-                {selectedProject.tools.length} tool(s)
+              <p className="mt-2 text-xs" style={{ color: colors.textMuted }}>
+                {selectedProject.tools.length} herramientas activas
               </p>
             </div>
           ) : null}
 
-          <div className="mb-2 flex items-center justify-between">
+          <div className="mb-3 flex items-center justify-between">
             <h2 className="text-sm font-medium" style={{ color: colors.text }}>
               Conversaciones
             </h2>
-            <motion.button
-              whileTap={{ scale: 0.95 }}
-              type="button"
-              onClick={() => setSelectedConversationId(null)}
-              className="rounded-lg px-3 py-1 text-xs font-medium text-white"
-              style={{ background: colors.accent }}
-            >
+            <GlassButton variant="soft" onClick={() => setSelectedConversationId(null)} className="px-3 py-1.5 text-xs">
               Nueva
-            </motion.button>
+            </GlassButton>
           </div>
 
-          <div className="flex-1 space-y-1.5 overflow-y-auto">
-            {conversations.map((conversation) => (
-              <motion.button
-                key={conversation.id}
-                type="button"
-                whileHover={{ x: 2 }}
-                onClick={() => setSelectedConversationId(conversation.id)}
-                className="w-full rounded-xl px-3 py-2 text-left text-sm transition"
-                style={{
-                  background:
-                    selectedConversationId === conversation.id ? colors.accentSoft : "transparent",
-                  color: selectedConversationId === conversation.id ? colors.accent : colors.textSoft,
-                  border: `1px solid ${selectedConversationId === conversation.id ? `${colors.accent}40` : "transparent"}`,
-                }}
-              >
-                {conversation.title}
-              </motion.button>
-            ))}
+          <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto overscroll-contain pr-1">
+            {conversations.map((conversation) => {
+              const active = selectedConversationId === conversation.id;
+              return (
+                <motion.button
+                  key={conversation.id}
+                  type="button"
+                  whileHover={{ x: 2 }}
+                  onClick={() => setSelectedConversationId(conversation.id)}
+                  className="w-full rounded-2xl px-3 py-2.5 text-left text-sm transition backdrop-blur-md"
+                  style={{
+                    background: active ? colors.accentSoft : "rgba(255,255,255,0.03)",
+                    color: active ? colors.accent : colors.textSoft,
+                    border: `1px solid ${active ? `${colors.accent}33` : colors.border}`,
+                  }}
+                >
+                  <span className="line-clamp-2">{conversation.title}</span>
+                </motion.button>
+              );
+            })}
           </div>
 
           <div className="mt-4 space-y-2 border-t pt-4" style={{ borderColor: colors.border }}>
             <Link
               href="/settings/ai-servers"
-              className="block text-sm transition hover:opacity-80"
+              className="block rounded-xl px-2 py-1.5 text-sm transition hover:opacity-80"
               style={{ color: colors.accent }}
             >
-              ⚙️ Proveedores de IA
+              Proveedores de IA
             </Link>
-            <Link href="/projects" className="block text-sm" style={{ color: colors.textSoft }}>
+            <Link
+              href="/projects"
+              className="block rounded-xl px-2 py-1.5 text-sm transition hover:opacity-80"
+              style={{ color: colors.textSoft }}
+            >
               Administrar proyectos
             </Link>
-            <p className="truncate text-xs" style={{ color: colors.textMuted }}>
+            <p className="truncate px-2 text-xs" style={{ color: colors.textMuted }}>
               Doc. {session?.user?.documentId}
             </p>
             <button
               type="button"
               onClick={() => signOut({ callbackUrl: "/login" })}
-              className="text-sm underline-offset-2 hover:underline"
+              className="px-2 text-sm underline-offset-2 hover:underline"
               style={{ color: colors.textSoft }}
             >
               Cerrar sesión
@@ -177,7 +189,7 @@ export default function ChatPage() {
           </div>
         </GlassCard>
 
-        <main className="min-h-[70vh]">
+        <main className="flex min-h-0 flex-col overflow-hidden">
           {selectedProjectId ? (
             <ChatWindow
               conversationId={selectedConversationId}

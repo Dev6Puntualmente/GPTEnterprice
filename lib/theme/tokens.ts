@@ -2,9 +2,9 @@ export const themeTokens = {
   light: {
     bg: "#f4f6fb",
     bgAlt: "#e8ecf4",
-    panel: "rgba(255,255,255,0.72)",
+    panel: "rgba(255,255,255,0.55)",
     panelSolid: "#ffffff",
-    panelAlt: "#f8fafc",
+    panelAlt: "rgba(248,250,252,0.72)",
     text: "#0f172a",
     textSoft: "#64748b",
     textMuted: "#94a3b8",
@@ -21,9 +21,9 @@ export const themeTokens = {
   dark: {
     bg: "#06080f",
     bgAlt: "#0c1019",
-    panel: "rgba(15,20,32,0.72)",
+    panel: "rgba(12,16,28,0.62)",
     panelSolid: "#0f1420",
-    panelAlt: "#121826",
+    panelAlt: "rgba(18,24,38,0.72)",
     text: "#f1f5f9",
     textSoft: "#94a3b8",
     textMuted: "#64748b",

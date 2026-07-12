@@ -15,11 +15,15 @@ export async function GET() {
     });
     const body = await response.text();
 
+    const parsed = JSON.parse(body) as { status?: string; version?: string };
+
     return NextResponse.json({
       ok: response.ok,
       agentApiUrl,
       status: response.status,
-      body,
+      version: parsed.version ?? "unknown",
+      jobsSupported: parsed.version === "agent-v2-jobs",
+      body: parsed,
     });
   } catch (healthError) {
     return NextResponse.json(

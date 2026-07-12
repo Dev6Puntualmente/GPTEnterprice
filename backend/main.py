@@ -28,6 +28,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.on_event("startup")
+def on_startup() -> None:
+    logger.info(
+        "GPTEnterprice Agent v2 listo — rutas: /health /tools /chat /jobs /files/{filename}"
+    )
+
+
 STORAGE_DIR = Path(settings.storage_dir)
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -60,11 +67,31 @@ class ChatResponse(BaseModel):
     model_used: str
     tool_calls: list[dict[str, Any]] | None = None
     files: list[str] | None = None
+    pending_job: dict[str, Any] | None = None
+
+
+class EnqueueJobRequest(BaseModel):
+    tool: str
+    label: str
+    args: dict[str, Any]
+
+
+def _tool_names(payload: ChatRequest) -> list[str]:
+    if not payload.tools:
+        return []
+    names: list[str] = []
+    for tool in payload.tools:
+        if isinstance(tool, dict):
+            fn = tool.get("function") or {}
+            name = fn.get("name")
+            if name:
+                names.append(str(name))
+    return names
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "version": "agent-v2-jobs"}
 
 
 @app.get("/tools")
@@ -73,6 +100,30 @@ def list_tools() -> dict[str, list]:
         "handlers": sorted(TOOL_HANDLERS.keys()),
         "catalog": TOOL_CATALOG,
     }
+
+
+@app.get("/jobs")
+def jobs(limit: int = 20) -> dict[str, list]:
+    from workers.job_runner import list_jobs
+
+    return {"jobs": list_jobs(limit=limit)}
+
+
+@app.get("/jobs/{job_id}")
+def job_status(job_id: str):
+    from workers.job_runner import get_job
+
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job no encontrado")
+    return job
+
+
+@app.post("/jobs")
+def enqueue_job(payload: EnqueueJobRequest):
+    from workers.job_runner import enqueue_tool_job
+
+    return enqueue_tool_job(payload.tool, payload.label, payload.args)
 
 
 @app.post("/chat")
@@ -85,6 +136,34 @@ def chat(payload: ChatRequest):
         len(payload.messages),
         payload.vllm.model if payload.vllm else settings.vllm_model,
     )
+
+    from services.intent import detect_heavy_tool_intent
+    from workers.job_runner import enqueue_tool_job
+
+    intent = detect_heavy_tool_intent(payload.messages, _tool_names(payload))
+    if intent:
+        logger.info("intent detectado en FastAPI: %s %s", intent["tool"], intent["args"])
+        job = enqueue_tool_job(intent["tool"], intent["label"], intent["args"])
+        start = intent["args"].get("fecha_inicio") or intent["args"].get("hora_inicio")
+        end = intent["args"].get("fecha_fin") or intent["args"].get("hora_fin")
+        message = (
+            f"Perfecto, estoy generando {intent['label']} "
+            f"para el periodo {start} → {end}. "
+            "Puedes seguir el progreso aquí; te avisaré cuando el Excel esté listo."
+        )
+        model = payload.vllm.model if payload.vllm else settings.vllm_model
+        return ChatResponse(
+            message=message,
+            model_used=model,
+            pending_job={
+                "id": job["id"],
+                "tool": job["tool"],
+                "label": job["label"],
+                "status": job["status"],
+                "progress": job["progress"],
+                "stage": job["stage"],
+            },
+        )
 
     try:
         result = run_agent(
