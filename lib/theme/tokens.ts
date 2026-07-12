@@ -1,0 +1,43 @@
+export const themeTokens = {
+  light: {
+    bg: "#f4f6fb",
+    bgAlt: "#e8ecf4",
+    panel: "rgba(255,255,255,0.72)",
+    panelSolid: "#ffffff",
+    panelAlt: "#f8fafc",
+    text: "#0f172a",
+    textSoft: "#64748b",
+    textMuted: "#94a3b8",
+    border: "rgba(15,23,42,0.08)",
+    accent: "#6366f1",
+    accentSoft: "rgba(99,102,241,0.12)",
+    glow: "rgba(99,102,241,0.35)",
+    orb1: "rgba(99,102,241,0.25)",
+    orb2: "rgba(14,165,233,0.2)",
+    orb3: "rgba(168,85,247,0.18)",
+    danger: "#ef4444",
+    success: "#10b981",
+  },
+  dark: {
+    bg: "#06080f",
+    bgAlt: "#0c1019",
+    panel: "rgba(15,20,32,0.72)",
+    panelSolid: "#0f1420",
+    panelAlt: "#121826",
+    text: "#f1f5f9",
+    textSoft: "#94a3b8",
+    textMuted: "#64748b",
+    border: "rgba(148,163,184,0.12)",
+    accent: "#818cf8",
+    accentSoft: "rgba(129,140,248,0.15)",
+    glow: "rgba(129,140,248,0.4)",
+    orb1: "rgba(99,102,241,0.35)",
+    orb2: "rgba(6,182,212,0.22)",
+    orb3: "rgba(168,85,247,0.25)",
+    danger: "#f87171",
+    success: "#34d399",
+  },
+} as const;
+
+export type ThemeMode = keyof typeof themeTokens;
+export type ThemeColors = (typeof themeTokens)[ThemeMode];

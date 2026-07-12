@@ -1,10 +1,10 @@
 generator client {
-  provider = "prisma-client-js"
+  provider = "prisma-client"
+  output   = "../generated/prisma"
 }
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
   schemas  = ["gptenterprice"]
 }
 
@@ -16,9 +16,25 @@ enum UserRole {
   @@schema("gptenterprice")
 }
 
+enum AiServerType {
+  VLLM
+  OPENAI_COMPATIBLE
+
+  @@schema("gptenterprice")
+}
+
+enum AiProviderRole {
+  SMART
+  FAST
+  GENERAL
+
+  @@schema("gptenterprice")
+}
+
 model User {
   id           String   @id @default(cuid())
-  email        String   @unique
+  documentId   String   @unique @map("document_id")
+  email        String?  @unique
   name         String?
   passwordHash String   @map("password_hash")
   role         UserRole @default(OPERATOR)
@@ -29,8 +45,31 @@ model User {
   sessions      Session[]
   projects      Project[]
   conversations Conversation[]
+  aiServers     AiServerConfig[]
 
   @@map("users")
+  @@schema("gptenterprice")
+}
+
+model AiServerConfig {
+  id        String         @id @default(cuid())
+  userId    String         @map("user_id")
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  type      AiServerType   @default(VLLM)
+  baseUrl   String         @map("base_url")
+  modelName String         @map("model_name")
+  apiKey    String?        @map("api_key")
+  role      AiProviderRole @default(GENERAL)
+  color     String         @default("#6366f1")
+  enabled   Boolean        @default(true)
+  isDefault Boolean        @default(false) @map("is_default")
+  createdAt DateTime       @default(now()) @map("created_at")
+  updatedAt DateTime       @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@index([userId, role])
+  @@map("ai_server_configs")
   @@schema("gptenterprice")
 }
 
@@ -114,8 +153,6 @@ model Message {
   @@map("messages")
   @@schema("gptenterprice")
 }
-
-// ── NextAuth (Prisma adapter) ─────────────────────────────────────────────
 
 model Account {
   id                String  @id @default(cuid())

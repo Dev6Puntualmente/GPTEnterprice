@@ -1,3 +1,16 @@
+export function getHfToken(): string | undefined {
+  const token = process.env.HF_TOKEN?.trim();
+  return token || undefined;
+}
+
+/** Usar 127.0.0.1 evita fallos de resolución localhost/IPv6 en Windows. */
+export function getAgentApiUrl(): string {
+  const raw = process.env.AGENT_API_URL?.trim() || "http://127.0.0.1:8100";
+  return raw
+    .replace("://localhost", "://127.0.0.1")
+    .replace(/\/+$/, "");
+}
+
 export function buildDatabaseUrl(): string {
   if (process.env.DATABASE_URL) {
     return process.env.DATABASE_URL;

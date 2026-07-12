@@ -1,12 +1,6 @@
-import bcrypt from "bcryptjs";
-import { PrismaClient, UserRole } from "@prisma/client";
-import { buildDatabaseUrl } from "../lib/env";
-
-const prisma = new PrismaClient({
-  datasources: {
-    db: { url: buildDatabaseUrl() },
-  },
-});
+import { hash } from "bcryptjs";
+import { UserRole } from "@/generated/prisma/client";
+import { prisma } from "@/lib/prisma";
 
 const RRHH_CONTEXT = {
   nombre: "Proyecto RRHH",
@@ -29,24 +23,42 @@ Nunca inventes datos. Si no tienes una herramienta para algo, dilo claramente.
 Cuando una herramienta genere un archivo, incluye el enlace en tu respuesta.`;
 
 async function main() {
+  const documentId = process.env.SEED_ADMIN_DOCUMENT ?? "1000000001";
   const email = process.env.SEED_ADMIN_EMAIL ?? "admin@gptenterprice.local";
   const password = process.env.SEED_ADMIN_PASSWORD ?? "Admin1234!";
-  const passwordHash = await bcrypt.hash(password, 12);
+  const passwordHash = await hash(password, 12);
 
   const admin = await prisma.user.upsert({
-    where: { email },
+    where: { documentId },
     update: {
       name: "Administrador",
       passwordHash,
       role: UserRole.ADMIN,
+      email,
     },
     create: {
+      documentId,
       email,
       name: "Administrador",
       passwordHash,
       role: UserRole.ADMIN,
     },
   });
+
+  const existingServers = await prisma.aiServerConfig.count({ where: { userId: admin.id } });
+  if (existingServers === 0) {
+    await prisma.aiServerConfig.create({
+      data: {
+        userId: admin.id,
+        name: "Phi 3.5",
+        baseUrl: process.env.VLLM_URL ?? "http://localhost:8002/v1",
+        modelName: process.env.VLLM_MODEL ?? "Phi-3.5-mini-instruct",
+        role: "GENERAL",
+        color: "#8b5cf6",
+        isDefault: true,
+      },
+    });
+  }
 
   const project = await prisma.project.upsert({
     where: { id: "demo-rrhh" },
@@ -115,7 +127,7 @@ async function main() {
     },
   });
 
-  console.log(`Admin: ${admin.email}`);
+  console.log(`Admin documento: ${admin.documentId}`);
   console.log(`Password demo: ${password}`);
   console.log(`Proyecto demo: ${project.name} (${project.id})`);
 

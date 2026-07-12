@@ -1,10 +1,10 @@
-import { MessageRole, Prisma } from "@prisma/client";
+import { MessageRole, Prisma } from "@/generated/prisma/client";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/require-auth";
+import { getAgentApiUrl } from "@/lib/env";
+import { resolveUserLlmEndpoint } from "@/lib/server-config-access";
 import type { ChatResponse, ToolDefinition } from "@/lib/types";
-
-const AGENT_API_URL = process.env.AGENT_API_URL ?? "http://localhost:8100";
 
 function toOpenAiTools(
   tools: Array<{
@@ -124,20 +124,50 @@ export async function POST(request: Request) {
     ? `\n\nContexto del proyecto:\n${JSON.stringify(conversation.project.contextJson, null, 2)}`
     : "";
 
-  const agentResponse = await fetch(`${AGENT_API_URL}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      system_prompt: `${conversation.project.systemPrompt}${contextBlock}`,
-      messages: toAgentMessages(history),
-      tools: toOpenAiTools(conversation.project.tools),
-    }),
-  });
+  const llmEndpoint = await resolveUserLlmEndpoint(session.user.id);
+  const agentApiUrl = getAgentApiUrl();
+  const chatUrl = `${agentApiUrl}/chat`;
+
+  let agentResponse: Response;
+  try {
+    console.info("[chat] contacting FastAPI:", chatUrl);
+    agentResponse = await fetch(chatUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(90_000),
+      body: JSON.stringify({
+        system_prompt: `${conversation.project.systemPrompt}${contextBlock}`,
+        messages: toAgentMessages(history),
+        tools: toOpenAiTools(conversation.project.tools),
+        vllm: llmEndpoint
+          ? {
+              base_url: llmEndpoint.baseUrl,
+              model: llmEndpoint.modelName,
+              api_key: llmEndpoint.apiKey,
+            }
+          : null,
+      }),
+    });
+  } catch (agentError) {
+    const detail =
+      agentError instanceof Error ? agentError.message : "FastAPI no está disponible";
+    return NextResponse.json(
+      { error: "No se pudo contactar FastAPI", detail, agentApiUrl, chatUrl },
+      { status: 502 },
+    );
+  }
 
   if (!agentResponse.ok) {
     const errorText = await agentResponse.text();
+    let detail = errorText;
+    try {
+      const parsed = JSON.parse(errorText) as { detail?: string };
+      detail = parsed.detail ?? errorText;
+    } catch {
+      // keep raw text
+    }
     return NextResponse.json(
-      { error: "Error al contactar el agente", detail: errorText },
+      { error: "Error al contactar el agente", detail, agentApiUrl, chatUrl },
       { status: 502 },
     );
   }

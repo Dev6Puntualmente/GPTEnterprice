@@ -18,14 +18,15 @@ class Settings(BaseSettings):
     salescloser_schema: str = "public"
     database_url: str | None = None
 
-    vllm_smart_url: str = "http://localhost:8001/v1"
-    vllm_fast_url: str = "http://localhost:8002/v1"
-    vllm_smart_model: str = "Qwen2.5-7B-Instruct"
-    vllm_fast_model: str = "Phi-3.5-mini-instruct"
+    vllm_url: str = "http://127.0.0.1:8002/v1"
+    vllm_model: str = "Phi-3.5-mini-instruct"
+    hf_token: str | None = None
+    agent_api_url: str = "http://127.0.0.1:8100"
     storage_dir: str = "storage"
     public_base_url: str = "http://localhost:8100"
     cors_origins: str = "http://localhost:3000"
     max_tool_iterations: int = 5
+    vllm_tools_enabled: bool = False
 
     @property
     def postgres_dsn(self) -> str:

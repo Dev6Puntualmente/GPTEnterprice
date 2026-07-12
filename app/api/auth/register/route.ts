@@ -6,17 +6,17 @@ import { prisma } from "@/lib/prisma";
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as {
-      email?: string;
+      documentId?: string;
       password?: string;
       name?: string;
     };
-    const email = body.email?.trim().toLowerCase() ?? "";
+    const documentId = body.documentId?.trim().replace(/\D/g, "") ?? "";
     const password = body.password ?? "";
     const name = body.name?.trim();
 
-    if (!email || !email.includes("@") || password.length < 8) {
+    if (!documentId || documentId.length < 6 || password.length < 8) {
       return NextResponse.json(
-        { error: "Email y contraseña (mín. 8) requeridos" },
+        { error: "Documento (mín. 6 dígitos) y contraseña (mín. 8) requeridos" },
         { status: 400 },
       );
     }
@@ -29,20 +29,20 @@ export async function POST(req: Request) {
       );
     }
 
-    const exists = await prisma.user.findUnique({ where: { email } });
+    const exists = await prisma.user.findUnique({ where: { documentId } });
     if (exists) {
-      return NextResponse.json({ error: "El correo ya está registrado" }, { status: 409 });
+      return NextResponse.json({ error: "El documento ya está registrado" }, { status: 409 });
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
     const user = await prisma.user.create({
       data: {
-        email,
+        documentId,
         name: name || null,
         passwordHash,
         role: "ADMIN",
       },
-      select: { id: true, email: true, name: true, role: true },
+      select: { id: true, documentId: true, name: true, role: true },
     });
 
     return NextResponse.json(user, { status: 201 });
