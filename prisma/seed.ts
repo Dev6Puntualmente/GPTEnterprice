@@ -1,6 +1,12 @@
-import { PrismaClient } from "@prisma/client";
+import bcrypt from "bcryptjs";
+import { PrismaClient, UserRole } from "@prisma/client";
+import { buildDatabaseUrl } from "../lib/env";
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({
+  datasources: {
+    db: { url: buildDatabaseUrl() },
+  },
+});
 
 const RRHH_CONTEXT = {
   nombre: "Proyecto RRHH",
@@ -23,9 +29,29 @@ Nunca inventes datos. Si no tienes una herramienta para algo, dilo claramente.
 Cuando una herramienta genere un archivo, incluye el enlace en tu respuesta.`;
 
 async function main() {
+  const email = process.env.SEED_ADMIN_EMAIL ?? "admin@gptenterprice.local";
+  const password = process.env.SEED_ADMIN_PASSWORD ?? "Admin1234!";
+  const passwordHash = await bcrypt.hash(password, 12);
+
+  const admin = await prisma.user.upsert({
+    where: { email },
+    update: {
+      name: "Administrador",
+      passwordHash,
+      role: UserRole.ADMIN,
+    },
+    create: {
+      email,
+      name: "Administrador",
+      passwordHash,
+      role: UserRole.ADMIN,
+    },
+  });
+
   const project = await prisma.project.upsert({
     where: { id: "demo-rrhh" },
     update: {
+      ownerId: admin.id,
       name: "Proyecto RRHH",
       description: "Asistente para reportes de usuarios y consultas de entrada",
       systemPrompt: SYSTEM_PROMPT,
@@ -33,6 +59,7 @@ async function main() {
     },
     create: {
       id: "demo-rrhh",
+      ownerId: admin.id,
       name: "Proyecto RRHH",
       description: "Asistente para reportes de usuarios y consultas de entrada",
       systemPrompt: SYSTEM_PROMPT,
@@ -88,7 +115,9 @@ async function main() {
     },
   });
 
-  console.log(`Proyecto demo creado: ${project.name} (${project.id})`);
+  console.log(`Admin: ${admin.email}`);
+  console.log(`Password demo: ${password}`);
+  console.log(`Proyecto demo: ${project.name} (${project.id})`);
 }
 
 main()

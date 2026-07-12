@@ -1,6 +1,7 @@
 import { MessageRole, Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireAuth } from "@/lib/require-auth";
 import type { ChatResponse, ToolDefinition } from "@/lib/types";
 
 const AGENT_API_URL = process.env.AGENT_API_URL ?? "http://localhost:8100";
@@ -26,7 +27,12 @@ function toOpenAiTools(
 }
 
 function toAgentMessages(
-  messages: Array<{ role: MessageRole; content: string; toolName?: string | null; toolCallId?: string | null }>,
+  messages: Array<{
+    role: MessageRole;
+    content: string;
+    toolName?: string | null;
+    toolCallId?: string | null;
+  }>,
 ) {
   return messages
     .filter((message) => message.role !== "SYSTEM")
@@ -48,6 +54,9 @@ function toAgentMessages(
 }
 
 export async function POST(request: Request) {
+  const { session, error } = await requireAuth();
+  if (error) return error;
+
   const body = await request.json();
   const { conversationId, message } = body as {
     conversationId?: string;
@@ -61,8 +70,8 @@ export async function POST(request: Request) {
 
   let conversation =
     conversationId &&
-    (await prisma.conversation.findUnique({
-      where: { id: conversationId },
+    (await prisma.conversation.findFirst({
+      where: { id: conversationId, userId: session.user.id },
       include: {
         project: { include: { tools: { where: { isActive: true } } } },
         messages: { orderBy: { createdAt: "asc" } },
@@ -77,8 +86,8 @@ export async function POST(request: Request) {
       );
     }
 
-    const project = await prisma.project.findUnique({
-      where: { id: body.projectId },
+    const project = await prisma.project.findFirst({
+      where: { id: body.projectId, ownerId: session.user.id },
       include: { tools: { where: { isActive: true } } },
     });
 
@@ -89,6 +98,7 @@ export async function POST(request: Request) {
     conversation = await prisma.conversation.create({
       data: {
         projectId: project.id,
+        userId: session.user.id,
         title: message.slice(0, 60),
       },
       include: {
@@ -106,7 +116,10 @@ export async function POST(request: Request) {
     },
   });
 
-  const history = [...conversation.messages, { role: MessageRole.USER, content: message.trim(), toolName: null, toolCallId: null }];
+  const history = [
+    ...conversation.messages,
+    { role: MessageRole.USER, content: message.trim(), toolName: null, toolCallId: null },
+  ];
   const contextBlock = conversation.project.contextJson
     ? `\n\nContexto del proyecto:\n${JSON.stringify(conversation.project.contextJson, null, 2)}`
     : "";

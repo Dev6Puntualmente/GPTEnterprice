@@ -32,19 +32,38 @@ VLLM OpenAI-compatible
 
 ```bash
 cp .env.example .env
-cp .env.local.example .env.local
 ```
 
-Edita `DATABASE_URL` en `.env.local` y copia las variables VLLM a `.env` (FastAPI las lee desde `backend/.env` o raíz).
+Edita `.env` con tus credenciales PostgreSQL. Puedes usar variables separadas o `DATABASE_URL` completa:
 
-### 2. Frontend + base de datos
+```env
+DB_HOST=localhost
+DB_PORT=5434
+DB_USER=SalesCloser
+DB_PASSWORD=tu_password
+DB_NAME=SalesCloserAI
+DB_SCHEMA=gptenterprice
+
+AUTH_SECRET=genera-un-secreto-largo
+NEXTAUTH_URL=http://localhost:3000
+```
+
+> **Importante:** GPTEnterprice usa el schema PostgreSQL `gptenterprice` dentro de tu BD existente. No toca las tablas de SalesCloser en `public`.
+
+### 2. Frontend + base de datos + auth
 
 ```bash
 npm install
-npx prisma generate
-npx prisma db push
+npm run db:migrate
 npm run db:seed
+npm run dev
 ```
+
+Credenciales demo del seed:
+- Email: `admin@gptenterprice.local`
+- Password: `Admin1234!`
+
+Login: [http://localhost:3000/login](http://localhost:3000/login)
 
 ### 3. Backend Python
 
@@ -84,7 +103,7 @@ vllm serve microsoft/Phi-3.5-mini-instruct --port 8002 --gpu-memory-utilization 
 npm run dev
 ```
 
-Abre [http://localhost:3000/chat](http://localhost:3000/chat)
+Abre [http://localhost:3000/chat](http://localhost:3000/chat) (requiere login)
 
 ## Probar
 

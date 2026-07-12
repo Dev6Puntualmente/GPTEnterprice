@@ -1,5 +1,6 @@
 "use client";
 
+import { signOut, useSession } from "next-auth/react";
 import { useEffect, useState } from "react";
 import { ChatWindow } from "@/app/components/ChatWindow";
 
@@ -17,6 +18,7 @@ type Conversation = {
 };
 
 export default function ChatPage() {
+  const { data: session } = useSession();
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -144,10 +146,21 @@ export default function ChatPage() {
 
           <a
             href="/projects"
-            className="mt-6 block text-sm text-zinc-500 underline-offset-2 hover:underline"
+            className="mt-4 block text-sm text-zinc-500 underline-offset-2 hover:underline"
           >
             Administrar proyectos
           </a>
+
+          <div className="mt-6 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+            <p className="truncate text-xs text-zinc-500">{session?.user?.email}</p>
+            <button
+              type="button"
+              onClick={() => signOut({ callbackUrl: "/login" })}
+              className="mt-2 text-sm text-zinc-600 underline-offset-2 hover:underline dark:text-zinc-400"
+            >
+              Cerrar sesión
+            </button>
+          </div>
         </aside>
 
         <main className="min-h-[70vh]">
