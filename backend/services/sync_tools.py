@@ -503,6 +503,73 @@ def _format_tool_result(
             lines.append(f"- **{camp.get('name')}** ({estado}) — id {camp.get('id')}")
         return prefix + "\n".join(lines)
 
+    if tool == "listar_criterios_campana":
+        if not data.get("success"):
+            candidatos = data.get("candidatos") or []
+            if candidatos:
+                lines = [f"**{data.get('mensaje')}**\n"]
+                for row in candidatos:
+                    lines.append(f"- {row.get('nombre')} (id {row.get('id')})")
+                return prefix + "\n".join(lines)
+            return prefix + (data.get("mensaje") or "No encontré criterios de esa campaña.")
+        camp = data.get("campana") or {}
+        lines = [
+            f"**Criterios — {camp.get('nombre', 'N/D')}** (id {camp.get('id')})\n",
+            f"Total: {data.get('total', 0)} · heredados incluidos: {'sí' if data.get('incluye_heredados') else 'no'}\n",
+        ]
+        for item in data.get("criterios") or []:
+            origen = item.get("origen", "propio")
+            lines.append(
+                f"- **{item.get('titulo')}** ({origen}) · peso {item.get('peso', 'N/D')} · {item.get('eval_kind', 'cumplimiento')}"
+            )
+            if item.get("prompt"):
+                lines.append(f"  Prompt: {str(item.get('prompt'))[:300]}")
+        return prefix + "\n".join(lines)
+
+    if tool == "buscar_criterio_campana":
+        if not data.get("success"):
+            return prefix + (data.get("mensaje") or "No encontré ese criterio.")
+        if data.get("criterio"):
+            item = data["criterio"]
+            return prefix + (
+                f"**{item.get('titulo')}** — campaña **{item.get('campana')}**\n\n"
+                f"{item.get('prompt', 'Sin prompt')}"
+            )
+        lines = [f"**{data.get('mensaje')}**\n"]
+        for item in data.get("criterios") or []:
+            lines.append(
+                f"- **{item.get('titulo')}** ({item.get('campana')})\n  {str(item.get('prompt', ''))[:200]}"
+            )
+        return prefix + "\n".join(lines)
+
+    if tool == "exportar_excel_salescloser":
+        if not data.get("success"):
+            return prefix + (data.get("error") or data.get("mensaje") or "No pude generar el Excel.")
+        url = data.get("url")
+        return prefix + (
+            f"**{data.get('mensaje', 'Excel generado')}**\n\n"
+            f"- Filas: {data.get('total_filas', 'N/D')}\n"
+            f"- Columnas: {', '.join(data.get('columnas') or [])}\n"
+            + (f"- Descarga: {url}\n" if url else "")
+        )
+
+    if tool == "ejecutar_consulta_salescloser":
+        if not data.get("success"):
+            return prefix + (data.get("error") or "Error en la consulta.")
+        lines = [f"**{data.get('mensaje', 'Vista previa')}**\n"]
+        for row in data.get("resultados") or []:
+            lines.append(f"- {row}")
+        return prefix + "\n".join(lines[:25])
+
+    if tool == "obtener_esquema_salescloser":
+        lines = [f"**{data.get('mensaje', 'Esquema SalesCloser')}**\n"]
+        for table in data.get("tablas") or []:
+            cols = ", ".join(
+                str(col.get("columna")) for col in (table.get("columnas") or [])[:12]
+            )
+            lines.append(f"- **{table.get('nombre')}**: {cols}")
+        return prefix + "\n".join(lines)
+
     if tool == "listar_escalaciones":
         lines = [f"**{data.get('mensaje', 'Escalaciones')}**\n"]
         for row in data.get("escalaciones") or []:
@@ -574,6 +641,7 @@ def _format_tool_result(
         if not gestiones:
             return prefix + (data.get("mensaje") or "No encontré gestiones con esos criterios.")
         lines = [f"**{data.get('mensaje', 'Gestiones')}**\n"]
+        show_full_text = tool == "crm_obtener_gestion" or len(gestiones) == 1
         for row in gestiones[:15]:
             alias = row.get("gestion_alias") or str(row.get("id", ""))[:8]
             lines.append(
@@ -583,8 +651,12 @@ def _format_tool_result(
                 f"{row.get('created_at', 'N/D')}"
             )
             if row.get("text_management"):
-                snippet = str(row["text_management"])[:120]
-                lines.append(f"  _{snippet}{'…' if len(str(row['text_management'])) > 120 else ''}_")
+                text = str(row["text_management"])
+                if show_full_text:
+                    lines.append(f"\n**Texto de gestión:**\n{text}")
+                else:
+                    snippet = text[:200]
+                    lines.append(f"  _{snippet}{'…' if len(text) > 200 else ''}_")
         if data.get("total", len(gestiones)) > len(gestiones):
             lines.append(f"\n_Mostrando {len(gestiones)} de {data.get('total')}._")
         return prefix + "\n".join(lines)

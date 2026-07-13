@@ -124,7 +124,7 @@ export async function POST(request: Request) {
     { role: MessageRole.USER, content: message.trim(), toolName: null, toolCallId: null },
   ]);
   const contextBlock = conversation.project.contextJson
-    ? `\n\nContexto del proyecto:\n${JSON.stringify(conversation.project.contextJson, null, 2)}`
+    ? `\n\nContexto del proyecto:\n${JSON.stringify(conversation.project.contextJson)}`
     : "";
   const dateContext = buildDateContext();
   const agentApiUrl = getAgentApiUrl();

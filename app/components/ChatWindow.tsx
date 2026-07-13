@@ -58,7 +58,11 @@ export function ChatWindow({
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [loadingLabel, setLoadingLabel] = useState("Pensando...");
+  const [streamPhase, setStreamPhase] = useState<"idle" | "working" | "typing">("idle");
   const [streamingContent, setStreamingContent] = useState<string | null>(null);
+  const pendingTokensRef = useRef("");
+  const flushTokensRef = useRef<number | null>(null);
+  const typingStartedRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [jobStates, setJobStates] = useState<Record<string, JobRuntimeState>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -195,13 +199,36 @@ export function ChatWindow({
   }, []);
 
   const visibleMessages = conversation?.messages.filter((m) => m.role !== "TOOL") ?? [];
-  const isBusy = loading || streamingContent !== null;
+  const isBusy = loading || streamPhase !== "idle";
+
+  const flushPendingTokens = useCallback(() => {
+    if (!pendingTokensRef.current) return;
+    const chunk = pendingTokensRef.current;
+    pendingTokensRef.current = "";
+    setStreamingContent((current) => (current ?? "") + chunk);
+  }, []);
+
+  useEffect(() => {
+    if (streamPhase !== "typing") return;
+    const intervalId = window.setInterval(() => {
+      flushPendingTokens();
+    }, 32);
+    return () => window.clearInterval(intervalId);
+  }, [streamPhase, flushPendingTokens]);
+
+  useEffect(() => {
+    return () => {
+      if (flushTokensRef.current !== null) {
+        cancelAnimationFrame(flushTokensRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const container = scrollRef.current;
     if (!container) return;
     container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
-  }, [conversation?.messages, loading, jobStates, streamingContent]);
+  }, [conversation?.messages, loading, jobStates, streamingContent, streamPhase, loadingLabel]);
 
   async function sendChatRequest(userText: string, attempt = 0): Promise<Response> {
     const response = await fetch("/api/chat/stream", {
@@ -235,7 +262,11 @@ export function ChatWindow({
     const userText = input.trim();
     setInput("");
     setLoading(true);
+    setStreamPhase("working");
     setLoadingLabel(looksLikeToolRequest(userText) ? "Consultando datos..." : "Pensando...");
+    setStreamingContent(null);
+    pendingTokensRef.current = "";
+    typingStartedRef.current = false;
     setError(null);
 
     const optimisticMessage: Message = {
@@ -261,8 +292,7 @@ export function ChatWindow({
       const contentType = response.headers.get("content-type") ?? "";
 
       if (contentType.includes("text/event-stream") && response.body) {
-        setLoading(false);
-        setStreamingContent("");
+        setStreamPhase("working");
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -292,8 +322,15 @@ export function ChatWindow({
               };
 
               if (event.type === "token" && event.content) {
-                setStreamingContent((current) => (current ?? "") + event.content);
+                if (!typingStartedRef.current) {
+                  typingStartedRef.current = true;
+                  setStreamPhase("typing");
+                  setLoading(false);
+                  setStreamingContent("");
+                }
+                pendingTokensRef.current += event.content;
               } else if (event.type === "status" && event.content) {
+                setStreamPhase("working");
                 setLoadingLabel(event.content);
               } else if (event.type === "error" && event.message) {
                 throw new Error(String(event.message));
@@ -310,7 +347,9 @@ export function ChatWindow({
           }
         }
 
+        flushPendingTokens();
         setStreamingContent(null);
+        setStreamPhase("idle");
         setLoading(false);
 
         if (resolvedConversationId) {
@@ -351,6 +390,10 @@ export function ChatWindow({
       setError(submitError instanceof Error ? submitError.message : "Error desconocido");
     } finally {
       setLoading(false);
+      setStreamPhase("idle");
+      setStreamingContent(null);
+      typingStartedRef.current = false;
+      pendingTokensRef.current = "";
       setLoadingLabel("Pensando...");
     }
   }
@@ -451,10 +494,43 @@ export function ChatWindow({
         })}
 
         {streamingContent !== null ? (
-          <ChatMessageBubble role="ASSISTANT" content={streamingContent} isStreaming />
+          <ChatMessageBubble
+            key="streaming-assistant"
+            role="ASSISTANT"
+            content={streamingContent}
+            isStreaming
+            streamPhase={streamPhase}
+          />
         ) : null}
 
-        {loading ? (
+        {streamPhase === "working" ? (
+          <div className="flex justify-start">
+            <div
+              className="flex max-w-md items-center gap-2.5 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm"
+              style={{
+                background: colors.surface,
+                color: colors.textMuted,
+                border: `1px solid ${colors.border}`,
+              }}
+            >
+              <span className="inline-flex gap-1" aria-hidden>
+                {[0, 1, 2].map((dot) => (
+                  <span
+                    key={dot}
+                    className="inline-block h-1.5 w-1.5 animate-pulse rounded-full"
+                    style={{
+                      background: colors.accent,
+                      animationDelay: `${dot * 180}ms`,
+                    }}
+                  />
+                ))}
+              </span>
+              <span style={{ color: colors.text }}>{loadingLabel}</span>
+            </div>
+          </div>
+        ) : null}
+
+        {loading && streamPhase !== "working" ? (
           <motion.div
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}

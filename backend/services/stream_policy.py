@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from config import settings
+from services.intent import message_needs_data_tools
 
 _GENERAL_ONLY = (
     r"^(?:hola|buenos|buenas|hey|hi)\b",
@@ -43,7 +44,8 @@ def resolve_effective_stream(
         return False
 
     if settings.vllm_tools_enabled and tool_names:
-        if not _is_general_question(_last_user_text(messages)):
+        last_user = _last_user_text(messages)
+        if not _is_general_question(last_user) and message_needs_data_tools(last_user):
             return False
 
     if settings.use_sync_tools:

@@ -134,6 +134,57 @@ def _last_user_text(messages: list[dict[str, Any]]) -> str:
     return ""
 
 
+_DATA_TOOL_PATTERNS = (
+    r"\bexcel\b",
+    r"\bxlsx\b",
+    r"\bexportar\b",
+    r"\breporte\b",
+    r"\binforme\b",
+    r"\bllamada",
+    r"\bcalls?\b",
+    r"\bcampaña\b",
+    r"\bcampana\b",
+    r"\bcriterio",
+    r"\btranscrip",
+    r"\bescalacion",
+    r"\bbuscar\b",
+    r"\blistar\b",
+    r"\bconsulta\b",
+    r"\bsql\b",
+    r"\bcrm\b",
+    r"\bgestion",
+    r"\bscore\b",
+    r"\bevaluaci",
+    r"\bid\s*[:#]?\s*\d+",
+    r"\b#\s*\d+",
+    r"\bn[uú]mero\s+\d+",
+    r"\bcu[aá]nt",
+    r"\btotal\b",
+    r"\bestad[ií]stica",
+    r"\bdetalle\b",
+    r"\bauditor",
+    r"\bdame\b",
+    r"\bmu[eé]strame\b",
+    r"\bdime\b",
+    r"\bobt[eé]n\b",
+    r"\bobtener\b",
+)
+
+
+def message_needs_data_tools(text: str) -> bool:
+    """True si el mensaje parece pedir datos/acciones del sistema (no charla general)."""
+    lowered = text.lower().strip()
+    if not lowered:
+        return False
+    if re.search(
+        r"qu[eé]\s+es\b|qu[eé]\s+(?:significa|son)\b|^explica\b|"
+        r"c[oó]mo\s+(?:funciona|te\s+uso|puedo\s+usarte)",
+        lowered,
+    ):
+        return False
+    return any(re.search(pattern, lowered, re.IGNORECASE) for pattern in _DATA_TOOL_PATTERNS)
+
+
 def detect_heavy_tool_intent(
     messages: list[dict[str, Any]],
     available_tools: list[str] | None,

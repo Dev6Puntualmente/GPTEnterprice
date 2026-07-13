@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import { motion } from "framer-motion";
 import { BuildingFileCard } from "@/app/components/chat/BuildingFileCard";
 import { useTheme } from "@/app/components/theme/ThemeProvider";
@@ -11,6 +12,7 @@ type ChatMessageBubbleProps = {
   content: string;
   metadata?: MessageMetadata | null;
   isStreaming?: boolean;
+  streamPhase?: "idle" | "working" | "typing";
   index?: number;
   jobState?: {
     progress?: number;
@@ -24,11 +26,46 @@ type ChatMessageBubbleProps = {
 const USER_BUBBLE_BG =
   "linear-gradient(135deg, #1e293b 0%, #0f172a 55%, #1e1b4b 100%)";
 
+const StreamingAssistantBubble = memo(function StreamingAssistantBubble({
+  content,
+}: {
+  content: string;
+}) {
+  const { colors, mode } = useTheme();
+
+  return (
+    <div className="flex min-w-0 justify-start">
+      <div
+        className="relative max-w-[min(88%,42rem)] min-w-0 rounded-2xl rounded-bl-md px-3.5 py-2.5 text-sm leading-relaxed sm:px-4 sm:py-3"
+        style={{
+          background: mode === "light" ? "rgba(255,255,255,0.92)" : colors.surface,
+          color: colors.text,
+          border: `1px solid ${colors.border}`,
+          boxShadow:
+            mode === "light"
+              ? "0 4px 20px rgba(15,23,42,0.06)"
+              : `0 8px 28px ${colors.glow}`,
+        }}
+      >
+        <p className="m-0 whitespace-pre-wrap break-words">
+          {content}
+          <span
+            aria-hidden
+            className="ml-0.5 inline-block h-[1.05em] w-[2px] translate-y-[2px] animate-pulse"
+            style={{ background: colors.accent }}
+          />
+        </p>
+      </div>
+    </div>
+  );
+});
+
 export function ChatMessageBubble({
   role,
   content,
   metadata,
   isStreaming = false,
+  streamPhase = "idle",
   index = 0,
   jobState,
 }: ChatMessageBubbleProps) {
@@ -39,21 +76,23 @@ export function ChatMessageBubble({
   const fileUrl = jobState?.fileUrl ?? files[0] ?? null;
   const status = jobState?.status ?? metadata?.job_status ?? pendingJob?.status;
   const showJobCard = Boolean(pendingJob);
+  const isTyping = isStreaming && streamPhase === "typing";
+
+  if (isTyping) {
+    return <StreamingAssistantBubble content={content} />;
+  }
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 14, scale: 0.98 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
       transition={{
-        type: "spring",
-        stiffness: 380,
-        damping: 30,
-        delay: Math.min(index * 0.04, 0.2),
+        duration: 0.22,
+        delay: Math.min(index * 0.03, 0.15),
       }}
       className={`flex min-w-0 ${isUser ? "justify-end" : "justify-start"}`}
     >
-      <motion.div
-        layout
+      <div
         className={`relative max-w-[min(88%,42rem)] min-w-0 break-words rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed sm:px-4 sm:py-3 ${
           isUser ? "rounded-br-md" : "rounded-bl-md"
         }`}
@@ -69,9 +108,7 @@ export function ChatMessageBubble({
               }
             : {
                 background:
-                  mode === "light"
-                    ? "rgba(255,255,255,0.88)"
-                    : colors.surface,
+                  mode === "light" ? "rgba(255,255,255,0.88)" : colors.surface,
                 color: colors.text,
                 border: `1px solid ${colors.border}`,
                 boxShadow:
@@ -83,25 +120,14 @@ export function ChatMessageBubble({
         }
       >
         {!isUser && mode === "light" ? (
-          <motion.div
+          <div
             className="pointer-events-none absolute -left-px top-3 h-8 w-1 rounded-full"
             style={{ background: `linear-gradient(180deg, ${colors.accent}, transparent)` }}
-            initial={{ scaleY: 0 }}
-            animate={{ scaleY: 1 }}
-            transition={{ delay: 0.1, duration: 0.35 }}
           />
         ) : null}
 
         <div className="relative">
           <Markdown content={content} inverted={isUser} />
-          {isStreaming ? (
-            <motion.span
-              className="ml-0.5 inline-block h-3.5 w-0.5 align-middle"
-              style={{ background: isUser ? "#c7d2fe" : colors.accent }}
-              animate={{ opacity: [1, 0.15, 1], scaleY: [1, 0.6, 1] }}
-              transition={{ duration: 0.75, repeat: Infinity }}
-            />
-          ) : null}
         </div>
 
         {showJobCard && pendingJob ? (
@@ -126,10 +152,8 @@ export function ChatMessageBubble({
             const isImage = /\.(svg|png|jpe?g|gif|webp)$/i.test(url);
             if (isImage) {
               return (
-                <motion.div
+                <div
                   key={url}
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
                   className="mt-3 max-w-full overflow-hidden rounded-xl"
                   style={{
                     border: `1px solid ${colors.border}`,
@@ -153,7 +177,7 @@ export function ChatMessageBubble({
                   >
                     Abrir en nueva pestaña
                   </a>
-                </motion.div>
+                </div>
               );
             }
             return (
@@ -182,7 +206,7 @@ export function ChatMessageBubble({
             {metadata.model_used}
           </p>
         ) : null}
-      </motion.div>
+      </div>
     </motion.div>
   );
 }

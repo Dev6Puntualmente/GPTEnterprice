@@ -311,6 +311,105 @@ def _criterion_status_label(result: dict[str, Any]) -> str:
     return "Pendiente"
 
 
+def _normalize_detalle_seccion(seccion: str | None) -> str:
+    if not seccion:
+        return "completo"
+    raw = seccion.strip().lower()
+    aliases = {
+        "campaña": "campana",
+        "campaign": "campana",
+        "customer": "cliente",
+        "agent": "agente",
+        "puntuacion": "score",
+        "puntuación": "score",
+        "compliance": "score",
+        "channel": "canal",
+        "fecha_llamada": "fecha",
+        "fecha_auditoria": "fecha",
+        "documento_cliente": "documento",
+        "marcada": "marcada",
+        "flagged": "marcada",
+    }
+    return aliases.get(raw, raw)
+
+
+def _build_field_payload(
+    seccion: str,
+    *,
+    parsed_id: int,
+    row: dict[str, Any],
+    ai: dict[str, Any],
+    effective_score: Any,
+    score_label: str,
+    channel: str,
+    human_score: Any,
+) -> dict[str, Any] | None:
+    campana = row.get("campana_nombre") or row.get("campana")
+    agente = row.get("agent_name") or ai.get("resolved_agent_name")
+    if seccion == "campana":
+        return {"success": True, "call_id": parsed_id, "seccion": seccion, "campana": campana}
+    if seccion == "cliente":
+        return {
+            "success": True,
+            "call_id": parsed_id,
+            "seccion": seccion,
+            "cliente": row.get("customer_name"),
+        }
+    if seccion == "agente":
+        return {"success": True, "call_id": parsed_id, "seccion": seccion, "agente": agente}
+    if seccion == "score":
+        return {
+            "success": True,
+            "call_id": parsed_id,
+            "seccion": seccion,
+            "score": effective_score,
+            "etiqueta": score_label,
+            "sentimiento": ai.get("sentiment"),
+            "calibrado": human_score is not None,
+        }
+    if seccion == "canal":
+        return {"success": True, "call_id": parsed_id, "seccion": seccion, "canal": channel}
+    if seccion == "documento":
+        return {
+            "success": True,
+            "call_id": parsed_id,
+            "seccion": seccion,
+            "documento": row.get("customer_document") or ai.get("customer_document"),
+        }
+    if seccion == "fecha":
+        return {
+            "success": True,
+            "call_id": parsed_id,
+            "seccion": seccion,
+            "fecha_llamada": ai.get("audio_call_date"),
+            "fecha_auditoria": row.get("audited_at") or row.get("created_at"),
+            "fecha_registro": row.get("created_at"),
+        }
+    if seccion == "marcada":
+        return {
+            "success": True,
+            "call_id": parsed_id,
+            "seccion": seccion,
+            "marcada": bool(row.get("is_flagged")),
+        }
+    if seccion == "cabecera":
+        return {
+            "success": True,
+            "call_id": parsed_id,
+            "seccion": seccion,
+            "cliente": row.get("customer_name"),
+            "documento": row.get("customer_document") or ai.get("customer_document"),
+            "agente": agente,
+            "campana": campana,
+            "canal": channel,
+            "marcada": bool(row.get("is_flagged")),
+            "fecha_llamada": ai.get("audio_call_date"),
+            "fecha_auditoria": row.get("audited_at") or row.get("created_at"),
+            "fecha_registro": row.get("created_at"),
+        }
+    return None
+
+
 def obtener_detalle_llamada(
     call_id: int | str | float,
     seccion: str | None = None,
@@ -484,8 +583,30 @@ def obtener_detalle_llamada(
         "coaching": row.get("coaching_items") or [],
     }
 
-    seccion_norm = (seccion or "completo").strip().lower()
-    if seccion_norm not in ("completo", "resumen", "criterios", "transcripcion", "chat", "acustica", "callgist"):
+    seccion_norm = _normalize_detalle_seccion(seccion)
+    field_payload = _build_field_payload(
+        seccion_norm,
+        parsed_id=parsed_id,
+        row=row,
+        ai=ai,
+        effective_score=effective_score,
+        score_label=score_label,
+        channel=channel,
+        human_score=human_score,
+    )
+    if field_payload is not None:
+        return field_payload
+
+    allowed_sections = (
+        "completo",
+        "resumen",
+        "criterios",
+        "transcripcion",
+        "chat",
+        "acustica",
+        "callgist",
+    )
+    if seccion_norm not in allowed_sections:
         seccion_norm = "completo"
 
     payload: dict[str, Any] = {
@@ -519,53 +640,534 @@ def obtener_detalle_llamada(
     return payload
 
 
-def reporte_llamadas_excel(
-    fecha_inicio: str,
-    fecha_fin: str,
+EXPORT_COLUMN_ALIASES: dict[str, tuple[str, str]] = {
+    "id": ("c.id", "ID"),
+    "customer_name": ("c.customer_name", "Nombre"),
+    "nombre": ("c.customer_name", "Nombre"),
+    "cliente": ("c.customer_name", "Cliente"),
+    "customer_document": ("c.customer_document", "Documento"),
+    "campana": ("COALESCE(camp.name, c.campana)", "Campaña"),
+    "campaign_id": ("c.campaign_id", "Campaña ID"),
+    "channel": ("c.channel", "Canal"),
+    "is_flagged": ("c.is_flagged", "Marcada"),
+    "created_at": ("c.created_at", "Fecha"),
+    "agente": ("u.name", "Agente"),
+    "agent_id": ("c.agent_id", "Agente ID"),
+}
+
+
+def _parse_bool_export(value: bool | str, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in ("true", "1", "yes", "si", "sí")
+    return default
+
+
+def _normalize_export_columnas(columnas: list[str] | str | None) -> list[str]:
+    if columnas is None:
+        return ["id", "customer_name", "agente", "campana", "channel", "is_flagged", "created_at"]
+    if isinstance(columnas, str):
+        import json
+
+        text = columnas.strip()
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, list):
+                    return [str(item).lower().strip() for item in parsed]
+            except json.JSONDecodeError:
+                pass
+        return [part.lower().strip() for part in text.split(",") if part.strip()]
+    return [str(item).lower().strip() for item in columnas]
+
+
+def _fetch_calls_for_excel(
+    *,
+    fecha_inicio: str | None = None,
+    fecha_fin: str | None = None,
     campana: str | None = None,
+    columnas: list[str] | str | None = None,
+    todas: bool = False,
+    limite: int = 50000,
+) -> tuple[list[dict[str, Any]], list[str], str | None]:
+    requested = _normalize_export_columnas(columnas)
+    select_parts: list[str] = []
+    headers: list[str] = []
+    for key in requested:
+        mapping = EXPORT_COLUMN_ALIASES.get(key)
+        if not mapping:
+            continue
+        expr, label = mapping
+        select_parts.append(f'{expr} AS "{label}"')
+        headers.append(label)
+    if not select_parts:
+        select_parts = [
+            'c.id AS "ID"',
+            'c.customer_name AS "Nombre"',
+            'u.name AS "Agente"',
+            'COALESCE(camp.name, c.campana) AS "Campaña"',
+            'c.channel AS "Canal"',
+            'c.is_flagged AS "Marcada"',
+            'c.created_at AS "Fecha"',
+        ]
+        headers = ["ID", "Nombre", "Agente", "Campaña", "Canal", "Marcada", "Fecha"]
+
+    conditions: list[str] = []
+    params: list[Any] = []
+    use_dates = not todas and bool(fecha_inicio or fecha_fin)
+    if use_dates:
+        start = (fecha_inicio or fecha_fin or _today()).strip()
+        end = (fecha_fin or fecha_inicio or start).strip()
+        conditions.extend(
+            [
+                "c.created_at >= %s::date",
+                "c.created_at < (%s::date + INTERVAL '1 day')",
+            ]
+        )
+        params.extend([start, end])
+
+    if campana:
+        conditions.append("(camp.name ILIKE %s OR c.campana ILIKE %s)")
+        pattern = f"%{campana.strip()}%"
+        params.extend([pattern, pattern])
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    query = f"""
+        SELECT {", ".join(select_parts)}
+        FROM calls c
+        LEFT JOIN users u ON u.id = c.agent_id
+        LEFT JOIN campaigns camp ON camp.id = c.campaign_id
+        {where}
+        ORDER BY c.created_at DESC
+        LIMIT %s
+    """
+    params.append(limite)
+    rows = fetch_all(query, tuple(params))
+
+    aviso: str | None = None
+    if not rows and use_dates:
+        fallback_conditions: list[str] = []
+        fallback_params: list[Any] = []
+        if campana:
+            fallback_conditions.append("(camp.name ILIKE %s OR c.campana ILIKE %s)")
+            pattern = f"%{campana.strip()}%"
+            fallback_params.extend([pattern, pattern])
+        fallback_where = (
+            f"WHERE {' AND '.join(fallback_conditions)}" if fallback_conditions else ""
+        )
+        fallback_query = f"""
+            SELECT {", ".join(select_parts)}
+            FROM calls c
+            LEFT JOIN users u ON u.id = c.agent_id
+            LEFT JOIN campaigns camp ON camp.id = c.campaign_id
+            {fallback_where}
+            ORDER BY c.created_at DESC
+            LIMIT %s
+        """
+        fallback_params.append(limite)
+        rows = fetch_all(fallback_query, tuple(fallback_params))
+        if rows:
+            aviso = (
+                f"No había llamadas entre {fecha_inicio} y {fecha_fin}; "
+                f"se exportaron todas las llamadas disponibles ({len(rows)})."
+            )
+
+    return rows, headers, aviso
+
+
+def _excel_cell_value(value: Any) -> Any:
+    if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            value = value.replace(tzinfo=None)
+        return value.isoformat(sep=" ", timespec="seconds")
+    if isinstance(value, (dict, list)):
+        return str(value)
+    return value
+
+
+def reporte_llamadas_excel(
+    fecha_inicio: str | None = None,
+    fecha_fin: str | None = None,
+    campana: str | None = None,
+    columnas: list[str] | str | None = None,
+    todas: bool | str = False,
 ) -> dict[str, Any]:
+    """
+    Exporta llamadas a Excel. Si no hay datos en el rango de fechas, reintenta con todas las llamadas.
+    Para reportes SQL personalizados preferir exportar_excel_salescloser.
+    """
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-    result = buscar_llamadas(
+    export_all = _parse_bool_export(todas, False) or (not fecha_inicio and not fecha_fin)
+
+    rows, headers, aviso = _fetch_calls_for_excel(
         fecha_inicio=fecha_inicio,
         fecha_fin=fecha_fin,
         campana=campana,
-        limite=500,
+        columnas=columnas,
+        todas=export_all,
     )
-    rows = result.get("llamadas", [])
+
+    if not rows:
+        return {
+            "success": False,
+            "total_llamadas": 0,
+            "mensaje": (
+                "No encontré llamadas para exportar. "
+                "Prueba sin fechas, con todas=true, o usa exportar_excel_salescloser."
+            ),
+        }
 
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "Llamadas"
-    sheet.append(["ID", "Cliente", "Agente", "Campaña", "Canal", "Marcada", "Fecha"])
+    sheet.append(headers)
 
     for row in rows:
-        created = row.get("created_at")
-        if isinstance(created, datetime):
-            created = created.isoformat()
-        sheet.append(
-            [
-                row.get("id"),
-                row.get("customer_name"),
-                row.get("agente"),
-                row.get("campana_nombre") or row.get("campana"),
-                row.get("channel"),
-                row.get("is_flagged"),
-                created,
-            ],
-        )
+        sheet.append([_excel_cell_value(row.get(header)) for header in headers])
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"llamadas_{fecha_inicio}_{fecha_fin}_{stamp}.xlsx"
+    range_label = "todas" if export_all else f"{fecha_inicio or 'inicio'}_{fecha_fin or 'fin'}"
+    filename = f"llamadas_{range_label}_{stamp}.xlsx"
     filepath = STORAGE_DIR / filename
     workbook.save(filepath)
 
     public_url = f"{settings.public_base_url.rstrip('/')}/files/{filename}"
+    mensaje = f"Reporte de {len(rows)} llamada(s) generado"
+    if aviso:
+        mensaje = f"{mensaje}. {aviso}"
     return {
         "success": True,
         "total_llamadas": len(rows),
         "archivo": filename,
         "url": public_url,
-        "mensaje": f"Reporte de {len(rows)} llamadas generado",
+        "columnas": headers,
+        "mensaje": mensaje,
+        "aviso": aviso,
+    }
+
+
+def _criterion_key(title: str, prompt: str) -> str:
+    return f"{title.strip().lower()}|{prompt.strip().lower()}"
+
+
+def _parse_bool(value: bool | str, default: bool = True) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in ("true", "1", "yes", "si", "sí")
+    return default
+
+
+def _resolve_campaign(
+    campana: str | None = None,
+    campana_id: int | str | float | None = None,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    if campana_id is not None:
+        try:
+            parsed_id = int(float(campana_id))
+        except (ValueError, TypeError):
+            return None, []
+        row = fetch_one(
+            """
+            SELECT id, name, description, parent_id, inherits_parent_criteria, is_active
+            FROM campaigns
+            WHERE id = %s
+            """,
+            (parsed_id,),
+        )
+        return row, []
+
+    if not campana or not str(campana).strip():
+        return None, []
+
+    name = str(campana).strip()
+    exact = fetch_one(
+        """
+        SELECT id, name, description, parent_id, inherits_parent_criteria, is_active
+        FROM campaigns
+        WHERE LOWER(name) = LOWER(%s)
+        """,
+        (name,),
+    )
+    if exact:
+        return exact, []
+
+    candidates = fetch_all(
+        """
+        SELECT id, name, description, parent_id, inherits_parent_criteria, is_active
+        FROM campaigns
+        WHERE name ILIKE %s
+        ORDER BY is_active DESC, name
+        LIMIT 10
+        """,
+        (f"%{name}%",),
+    )
+    if len(candidates) == 1:
+        return candidates[0], []
+    return None, candidates
+
+
+def _fetch_own_criteria_rows(campaign_id: int, active_only: bool = True) -> list[dict[str, Any]]:
+    conditions = ["sc.campaign_id = %s"]
+    params: list[Any] = [campaign_id]
+    if active_only:
+        conditions.append("sc.is_active = TRUE")
+
+    query = f"""
+        SELECT
+            sc.id,
+            sc.campaign_id,
+            sc.title,
+            sc.prompt,
+            sc.weight,
+            sc.is_active,
+            sc.non_applicable_hint,
+            sc.tipo,
+            sc.categoria,
+            sc.eval_kind,
+            sc.is_important,
+            sc.channels,
+            camp.name AS campana_nombre
+        FROM supervisor_criteria sc
+        JOIN campaigns camp ON camp.id = sc.campaign_id
+        WHERE {' AND '.join(conditions)}
+        ORDER BY sc.title ASC, sc.id ASC
+    """
+    return fetch_all(query, tuple(params))
+
+
+def _fetch_effective_campaign_criteria(
+    campaign_id: int,
+    active_only: bool = True,
+    include_inherited: bool = True,
+    _visited: set[int] | None = None,
+) -> list[dict[str, Any]]:
+    if _visited is None:
+        _visited = set()
+    if campaign_id in _visited:
+        return []
+    _visited.add(campaign_id)
+
+    campaign = fetch_one(
+        """
+        SELECT id, name, parent_id, inherits_parent_criteria
+        FROM campaigns
+        WHERE id = %s
+        """,
+        (campaign_id,),
+    )
+    if not campaign:
+        return []
+
+    own = _fetch_own_criteria_rows(campaign_id, active_only)
+    for row in own:
+        row["origen"] = "propio"
+
+    parent_id = campaign.get("parent_id")
+    inherits_parent = campaign.get("inherits_parent_criteria") is not False
+    if not include_inherited or not parent_id or not inherits_parent:
+        return own
+
+    parent_criteria = _fetch_effective_campaign_criteria(
+        int(parent_id),
+        active_only=active_only,
+        include_inherited=True,
+        _visited=_visited,
+    )
+    own_keys = {_criterion_key(str(c.get("title", "")), str(c.get("prompt", ""))) for c in own}
+    inherited: list[dict[str, Any]] = []
+    for criterion in parent_criteria:
+        key = _criterion_key(str(criterion.get("title", "")), str(criterion.get("prompt", "")))
+        if key in own_keys:
+            continue
+        inherited.append({**criterion, "origen": "heredado"})
+    return inherited + own
+
+
+def _serialize_criterion(row: dict[str, Any], include_prompt: bool = True) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "id": row.get("id"),
+        "titulo": row.get("title"),
+        "campana_id": row.get("campaign_id"),
+        "campana": row.get("campana_nombre"),
+        "peso": row.get("weight"),
+        "activo": row.get("is_active"),
+        "tipo": row.get("tipo"),
+        "categoria": row.get("categoria"),
+        "eval_kind": row.get("eval_kind"),
+        "importante": row.get("is_important"),
+        "canales": row.get("channels"),
+        "hint_no_aplica": row.get("non_applicable_hint"),
+        "origen": row.get("origen", "propio"),
+    }
+    if include_prompt:
+        payload["prompt"] = row.get("prompt")
+    return payload
+
+
+def listar_criterios_campana(
+    campana: str | None = None,
+    campana_id: int | str | float | None = None,
+    incluir_heredados: bool | str = True,
+    solo_activos: bool | str = True,
+    incluir_prompt: bool | str = False,
+) -> dict[str, Any]:
+    """
+    Lista criterios de evaluación de una campaña Qontrol (supervisor_criteria).
+    Busca la campaña por nombre (ej. BBVA) o por campana_id.
+    """
+    active_only = _parse_bool(solo_activos, True)
+    include_inherited = _parse_bool(incluir_heredados, True)
+    with_prompt = _parse_bool(incluir_prompt, True)
+
+    campaign, candidates = _resolve_campaign(campana=campana, campana_id=campana_id)
+    if not campaign:
+        if candidates:
+            return {
+                "success": False,
+                "mensaje": f"Hay varias campañas que coinciden con '{campana}'. Sé más específico.",
+                "candidatos": [
+                    {"id": row.get("id"), "nombre": row.get("name"), "activa": row.get("is_active")}
+                    for row in candidates
+                ],
+            }
+        label = campana or campana_id
+        return {"success": False, "mensaje": f"No encontré la campaña '{label}'"}
+
+    rows = _fetch_effective_campaign_criteria(
+        int(campaign["id"]),
+        active_only=active_only,
+        include_inherited=include_inherited,
+    )
+    criterios = [_serialize_criterion(row, include_prompt=with_prompt) for row in rows]
+    return {
+        "success": True,
+        "campana": {
+            "id": campaign.get("id"),
+            "nombre": campaign.get("name"),
+            "activa": campaign.get("is_active"),
+            "hereda_criterios_padre": campaign.get("inherits_parent_criteria") is not False,
+        },
+        "total": len(criterios),
+        "incluye_heredados": include_inherited,
+        "criterios": criterios,
+        "mensaje": (
+            f"Encontré {len(criterios)} criterio(s) para la campaña "
+            f"'{campaign.get('name')}'"
+        ),
+    }
+
+
+def buscar_criterio_campana(
+    nombre: str,
+    campana: str | None = None,
+    solo_activos: bool | str = True,
+) -> dict[str, Any]:
+    """
+    Busca un criterio de campaña por nombre/título (ej. 'Tono de voz alta')
+    y devuelve su prompt completo. Filtro opcional por campaña.
+    """
+    query_name = (nombre or "").strip()
+    if not query_name:
+        return {"success": False, "mensaje": "Indica el nombre del criterio a buscar"}
+
+    active_only = _parse_bool(solo_activos, True)
+    conditions = ["(sc.title ILIKE %s OR sc.prompt ILIKE %s)"]
+    params: list[Any] = [f"%{query_name}%", f"%{query_name}%"]
+
+    if active_only:
+        conditions.append("sc.is_active = TRUE")
+
+    campaign_filter: dict[str, Any] | None = None
+    if campana and str(campana).strip():
+        campaign, candidates = _resolve_campaign(campana=str(campana).strip())
+        if not campaign:
+            if candidates:
+                return {
+                    "success": False,
+                    "mensaje": f"Hay varias campañas que coinciden con '{campana}'",
+                    "candidatos": [
+                        {"id": row.get("id"), "nombre": row.get("name")}
+                        for row in candidates
+                    ],
+                }
+            return {"success": False, "mensaje": f"No encontré la campaña '{campana}'"}
+        campaign_filter = campaign
+        conditions.append("sc.campaign_id = %s")
+        params.append(int(campaign["id"]))
+
+    where = " AND ".join(conditions)
+    rows = fetch_all(
+        f"""
+        SELECT
+            sc.id,
+            sc.campaign_id,
+            sc.title,
+            sc.prompt,
+            sc.weight,
+            sc.is_active,
+            sc.non_applicable_hint,
+            sc.tipo,
+            sc.categoria,
+            sc.eval_kind,
+            sc.is_important,
+            sc.channels,
+            camp.name AS campana_nombre
+        FROM supervisor_criteria sc
+        JOIN campaigns camp ON camp.id = sc.campaign_id
+        WHERE {where}
+        ORDER BY
+            CASE
+                WHEN LOWER(sc.title) = LOWER(%s) THEN 0
+                WHEN sc.title ILIKE %s THEN 1
+                ELSE 2
+            END,
+            sc.title ASC
+        LIMIT 15
+        """,
+        tuple(params + [query_name, f"%{query_name}%"]),
+    )
+
+    if not rows and campaign_filter and campaign_filter.get("inherits_parent_criteria") is not False:
+        effective = _fetch_effective_campaign_criteria(
+            int(campaign_filter["id"]),
+            active_only=active_only,
+            include_inherited=True,
+        )
+        needle = query_name.lower()
+        rows = [
+            row
+            for row in effective
+            if needle in str(row.get("title", "")).lower()
+            or needle in str(row.get("prompt", "")).lower()
+        ]
+
+    if not rows:
+        suffix = f" en la campaña '{campana}'" if campana else ""
+        return {
+            "success": False,
+            "mensaje": f"No encontré criterios que coincidan con '{query_name}'{suffix}",
+        }
+
+    criterios = [_serialize_criterion(row, include_prompt=True) for row in rows]
+    if len(criterios) == 1:
+        item = criterios[0]
+        return {
+            "success": True,
+            "criterio": item,
+            "criterios": criterios,
+            "mensaje": (
+                f"Criterio '{item.get('titulo')}' de la campaña "
+                f"'{item.get('campana')}'"
+            ),
+        }
+
+    return {
+        "success": True,
+        "total": len(criterios),
+        "criterios": criterios,
+        "mensaje": f"Encontré {len(criterios)} criterio(s) que coinciden con '{query_name}'",
     }
 
 

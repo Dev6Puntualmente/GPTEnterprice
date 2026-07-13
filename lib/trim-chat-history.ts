@@ -1,10 +1,17 @@
 import { MessageRole } from "@/generated/prisma/client";
 
-/** Últimos N mensajes de usuario y N del asistente (sin TOOL) para no exceder contexto del LLM. */
-export function trimChatHistory<T extends { role: MessageRole | string }>(
-  messages: T[],
-  perRole = 3,
-): T[] {
+const MAX_MESSAGE_CHARS = 2500;
+const DEFAULT_PER_ROLE = 2;
+
+function truncateContent(text: string, maxChars = MAX_MESSAGE_CHARS): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(0, maxChars - 14))}...[truncado]`;
+}
+
+/** Últimos N mensajes de usuario y N del asistente (sin TOOL), con contenido truncado. */
+export function trimChatHistory<
+  T extends { role: MessageRole | string; content?: string | null },
+>(messages: T[], perRole = DEFAULT_PER_ROLE): T[] {
   let users = 0;
   let assistants = 0;
   const kept: T[] = [];
@@ -23,7 +30,11 @@ export function trimChatHistory<T extends { role: MessageRole | string }>(
       continue;
     }
 
-    kept.unshift(message);
+    const content = typeof message.content === "string" ? message.content : "";
+    kept.unshift({
+      ...message,
+      content: truncateContent(content),
+    });
   }
 
   return kept;

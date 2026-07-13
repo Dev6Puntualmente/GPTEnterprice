@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import date, timedelta
 from typing import Any
 
 from tools.crm_db import fetch_crm_all, fetch_crm_one, USERS_ONLINE_CONDITION
+
+_DOCUMENTO_RE = re.compile(r"^\d{6,15}$")
+_GESTION_ALIAS_RE = re.compile(r"^G\d{5,12}$", re.IGNORECASE)
 
 _GESTION_SELECT = """
     SELECT
@@ -32,6 +36,32 @@ _GESTION_SELECT = """
     LEFT JOIN config.catalog_items ct ON ct.id = m.contact_id
     LEFT JOIN config.catalog_items rs ON rs.id = m.result_id
 """
+
+
+def _coerce_optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text if text else None
+
+
+def _normalize_gestion_filters(
+    documento: str | None,
+    cliente: str | None,
+    asesor: str | None,
+    gestion_id: str | None,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    documento = _coerce_optional_str(documento)
+    cliente = _coerce_optional_str(cliente)
+    asesor = _coerce_optional_str(asesor)
+    gestion_id = _coerce_optional_str(gestion_id)
+
+    # El LLM a veces manda la cédula en "cliente" — corregir automáticamente.
+    if cliente and _DOCUMENTO_RE.fullmatch(cliente) and not documento:
+        documento = cliente
+        cliente = None
+
+    return documento, cliente, asesor, gestion_id
 
 
 def _parse_limite(value: int | str | float, default: int = 20, maximum: int = 100) -> int:
@@ -100,6 +130,10 @@ def crm_listar_gestiones(
     """
     if isinstance(solo_ultima, str):
         solo_ultima = solo_ultima.lower() in ("true", "1", "yes")
+
+    documento, cliente, asesor, gestion_id = _normalize_gestion_filters(
+        documento, cliente, asesor, gestion_id
+    )
 
     if gestion_id:
         return crm_obtener_gestion(gestion_id)

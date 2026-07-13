@@ -127,9 +127,23 @@ async def chat(payload: ChatRequest):
     if not payload.messages:
         raise HTTPException(status_code=400, detail="messages no puede estar vacío")
 
-    from services.chat_context import trim_messages_for_agent
+    from services.chat_context import log_context_size, slim_system_prompt, trim_messages_for_agent
 
-    payload.messages = trim_messages_for_agent(payload.messages, per_role=3)
+    payload.messages = trim_messages_for_agent(payload.messages, per_role=2)
+    use_native_tools = settings.vllm_tools_enabled and bool(payload.tools)
+    if use_native_tools:
+        payload.system_prompt = slim_system_prompt(
+            payload.system_prompt,
+            drop_project_context=True,
+        )
+
+    log_context_size(
+        logger,
+        label="chat context",
+        system_prompt=payload.system_prompt,
+        messages=payload.messages,
+        tools_count=len(payload.tools or []),
+    )
 
     logger.info(
         "chat request: %s mensajes, vllm=%s, sync_tools=%s, vllm_tools=%s",

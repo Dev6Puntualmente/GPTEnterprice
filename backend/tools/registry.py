@@ -171,13 +171,20 @@ def buscar_usuario(query: str, fecha: str | None = None) -> dict[str, Any]:
 
 
 from tools.salescloser import (
+    buscar_criterio_campana,
     buscar_llamadas,
     listar_campanas,
+    listar_criterios_campana,
     listar_escalaciones,
     obtener_detalle_llamada,
     obtener_transcripcion_llamada,
     reporte_llamadas_excel,
     resumen_evaluacion_llamada,
+)
+from tools.salescloser_reports import (
+    ejecutar_consulta_salescloser,
+    exportar_excel_salescloser,
+    obtener_esquema_salescloser,
 )
 from tools.reports import obtener_reporte_estadisticas
 from tools.poster import generar_poster_alerta
@@ -209,11 +216,16 @@ TOOL_HANDLERS = {
     "buscar_usuario": buscar_usuario,
     # ── SalesCloser / Qontrol ─────────────────────────────────────────────────
     "listar_campanas": listar_campanas,
+    "listar_criterios_campana": listar_criterios_campana,
+    "buscar_criterio_campana": buscar_criterio_campana,
     "buscar_llamadas": buscar_llamadas,
     "obtener_transcripcion_llamada": obtener_transcripcion_llamada,
     "obtener_detalle_llamada": obtener_detalle_llamada,
     "resumen_evaluacion_llamada": resumen_evaluacion_llamada,
     "reporte_llamadas_excel": reporte_llamadas_excel,
+    "obtener_esquema_salescloser": obtener_esquema_salescloser,
+    "ejecutar_consulta_salescloser": ejecutar_consulta_salescloser,
+    "exportar_excel_salescloser": exportar_excel_salescloser,
     "listar_escalaciones": listar_escalaciones,
     "obtener_reporte_estadisticas": obtener_reporte_estadisticas,
     # ── CRM ───────────────────────────────────────────────────────────────────
@@ -240,19 +252,24 @@ TOOL_CATALOG = {
     "generar_reporte_excel": "Demo RRHH — Excel de usuarios por rango horario",
     "buscar_usuario": "Demo RRHH — Buscar hora de entrada de un usuario",
     "listar_campanas": "SalesCloser — Listar campañas activas",
+    "listar_criterios_campana": "SalesCloser — Criterios de evaluación de una campaña (por nombre, ej. BBVA)",
+    "buscar_criterio_campana": "SalesCloser — Buscar criterio por título y obtener su prompt (ej. Tono de voz alta)",
     "buscar_llamadas": "SalesCloser — Buscar llamadas por fecha, campaña o cliente",
     "obtener_transcripcion_llamada": "SalesCloser — Obtener transcripción de una llamada",
-    "obtener_detalle_llamada": "Qontrol — Detalle completo de auditoría (resumen, criterios, acústica, chat, transcripción)",
+    "obtener_detalle_llamada": "Qontrol — Detalle de llamada; usa seccion para un solo campo (campana, agente, score, etc.)",
     "resumen_evaluacion_llamada": "SalesCloser — Score y evaluación IA de una llamada",
-    "reporte_llamadas_excel": "SalesCloser — Exportar llamadas a Excel",
+    "reporte_llamadas_excel": "SalesCloser — Excel llamadas (plantilla; si el rango está vacío exporta todas)",
+    "obtener_esquema_salescloser": "SalesCloser — Esquema de tablas/columnas para armar reportes SQL",
+    "ejecutar_consulta_salescloser": "SalesCloser — Ejecutar SELECT de lectura (vista previa)",
+    "exportar_excel_salescloser": "SalesCloser — PRINCIPAL: Excel desde SELECT personalizado (ej. solo nombres)",
     "listar_escalaciones": "SalesCloser — Ver escalaciones por estado",
     "obtener_reporte_estadisticas": "SalesCloser — Reporte agregado con estadísticas de llamadas",
     "ejecutar_consulta_crm": "CRM — Ejecutar consulta SQL SELECT personalizada en el CRM",
     "crm_buscar_clientes": "CRM — Buscar clientes por nombre, documento, ciudad o estado",
     "crm_buscar_usuarios": "CRM — Buscar usuarios/agentes del CRM",
     "crm_resumen_estadisticas": "CRM — Estadísticas globales del CRM (clientes, agentes, chats)",
-    "crm_listar_gestiones": "CRM — Listar/buscar gestiones por cédula, cliente, asesor o fechas",
-    "crm_obtener_gestion": "CRM — Obtener una gestión por UUID o alias corto",
+    "crm_listar_gestiones": "CRM — Listar gestiones: documento=cédula, cliente=nombre, gestion_id=alias G00…",
+    "crm_obtener_gestion": "CRM — Detalle y texto (text_management) de una gestión por alias G00… o UUID",
     "crm_listar_arboles_tipificacion": "CRM — Listar árboles de tipificación",
     "crm_arbol_capas": "CRM — Ver capas (catálogos) de un árbol de tipificación",
     "crm_listar_flujos": "CRM — Listar flujos nombrados de un árbol",

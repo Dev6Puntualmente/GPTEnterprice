@@ -63,7 +63,10 @@ const CRM_TOOLS: SeedTool[] = [
   },
   {
     name: "crm_listar_gestiones",
-    description: "Lista gestiones por cédula, cliente, asesor o fechas. Usa solo_ultima=true para la más reciente.",
+    description:
+      "Lista gestiones del CRM. Para cédula/documento usa el parámetro documento (NO cliente). " +
+      "cliente es solo para buscar por nombre. gestion_id acepta alias como G00000207. " +
+      "solo_ultima=true devuelve la más reciente.",
     handlerKey: "crm_listar_gestiones",
     parameters: {
       type: "object",
@@ -81,7 +84,10 @@ const CRM_TOOLS: SeedTool[] = [
   },
   {
     name: "crm_obtener_gestion",
-    description: "Obtiene una gestión por UUID o alias corto.",
+    description:
+      "Detalle de UNA gestión por alias (ej. G00000207) o UUID. " +
+      "Incluye text_management (texto completo de la gestión). " +
+      "Usar cuando pidan texto, detalle o comentario de una gestión específica.",
     handlerKey: "crm_obtener_gestion",
     parameters: {
       type: "object",
@@ -276,6 +282,42 @@ const SALESCLOSER_TOOLS: SeedTool[] = [
     },
   },
   {
+    name: "listar_criterios_campana",
+    description:
+      "Lista todos los criterios de evaluación de una campaña Qontrol (supervisor_criteria). Busca la campaña por nombre (ej. BBVA), no solo por ID. Incluye criterios heredados del padre si aplica.",
+    handlerKey: "listar_criterios_campana",
+    parameters: {
+      type: "object",
+      properties: {
+        campana: { type: "string", description: "Nombre de la campaña (parcial o exacto, ej. BBVA)" },
+        campana_id: { type: "number", description: "ID numérico opcional si ya lo conoces" },
+        incluir_heredados: { type: "boolean", description: "Incluir criterios heredados de campaña padre (default true)" },
+        solo_activos: { type: "boolean", description: "Solo criterios activos (default true)" },
+        incluir_prompt: {
+          type: "boolean",
+          description:
+            "true solo si piden el prompt completo de TODOS los criterios; por defecto false (solo títulos)",
+        },
+      },
+      required: ["campana"],
+    },
+  },
+  {
+    name: "buscar_criterio_campana",
+    description:
+      "Busca un criterio de campaña por nombre/título (ej. 'Tono de voz alta') y devuelve su prompt completo. Filtro opcional por campaña.",
+    handlerKey: "buscar_criterio_campana",
+    parameters: {
+      type: "object",
+      properties: {
+        nombre: { type: "string", description: "Nombre o título del criterio a buscar" },
+        campana: { type: "string", description: "Opcional: limitar búsqueda a una campaña por nombre" },
+        solo_activos: { type: "boolean" },
+      },
+      required: ["nombre"],
+    },
+  },
+  {
     name: "buscar_llamadas",
     description: "Busca llamadas por ID, fechas, campaña o cliente",
     handlerKey: "buscar_llamadas",
@@ -294,7 +336,7 @@ const SALESCLOSER_TOOLS: SeedTool[] = [
   {
     name: "obtener_detalle_llamada",
     description:
-      "Detalle completo Qontrol/CallDetail: resumen IA, score, criterios, acústica, transcripción o chat WhatsApp",
+      "Detalle de una llamada Qontrol. Usa seccion para devolver solo lo pedido: campana | cliente | agente | score | canal | documento | fecha | resumen | criterios | transcripcion | chat | acustica | callgist | completo",
     handlerKey: "obtener_detalle_llamada",
     parameters: {
       type: "object",
@@ -302,7 +344,8 @@ const SALESCLOSER_TOOLS: SeedTool[] = [
         call_id: { type: "number" },
         seccion: {
           type: "string",
-          description: "resumen | criterios | transcripcion | chat | acustica | callgist | completo",
+          description:
+            "campana | cliente | agente | score | canal | documento | fecha | resumen | criterios | transcripcion | chat | acustica | callgist | completo",
         },
         limite_transcripcion: { type: "number" },
       },
@@ -330,17 +373,65 @@ const SALESCLOSER_TOOLS: SeedTool[] = [
     },
   },
   {
+    name: "exportar_excel_salescloser",
+    description:
+      "PRINCIPAL para Excel: exporta el resultado de un SELECT en SalesCloser. Ej: solo nombres → SELECT customer_name AS nombre FROM calls ORDER BY created_at DESC. Obligatorio cuando pidan columnas custom o todas las llamadas.",
+    handlerKey: "exportar_excel_salescloser",
+    parameters: {
+      type: "object",
+      properties: {
+        query_sql: { type: "string", description: "SELECT que define columnas y filas del Excel" },
+        nombre_hoja: { type: "string", description: "Nombre de la hoja Excel" },
+        nombre_archivo: { type: "string", description: "Prefijo del archivo sin extensión" },
+        limite: { type: "number", description: "Máximo de filas (default 50000)" },
+      },
+      required: ["query_sql"],
+    },
+  },
+  {
     name: "reporte_llamadas_excel",
-    description: "Genera Excel con llamadas en un rango de fechas",
+    description:
+      "Excel de llamadas con plantilla fija (opcional por fechas). NO usar si piden solo nombres o todas las llamadas sin fechas — usa exportar_excel_salescloser.",
     handlerKey: "reporte_llamadas_excel",
     parameters: {
       type: "object",
       properties: {
-        fecha_inicio: { type: "string" },
-        fecha_fin: { type: "string" },
+        fecha_inicio: { type: "string", description: "Opcional YYYY-MM-DD" },
+        fecha_fin: { type: "string", description: "Opcional YYYY-MM-DD" },
         campana: { type: "string" },
+        columnas: {
+          type: "array",
+          items: { type: "string" },
+          description: "Ej: ['nombre'] o ['customer_name','created_at']",
+        },
+        todas: { type: "boolean", description: "true = todas las llamadas sin filtro de fecha" },
       },
-      required: ["fecha_inicio", "fecha_fin"],
+    },
+  },
+  {
+    name: "obtener_esquema_salescloser",
+    description:
+      "Lista tablas y columnas de SalesCloser/Qontrol (calls, campaigns, users, etc.) para construir reportes SQL dinámicos.",
+    handlerKey: "obtener_esquema_salescloser",
+    parameters: {
+      type: "object",
+      properties: {
+        tabla: { type: "string", description: "Opcional: filtrar por nombre de tabla (ej. calls)" },
+      },
+    },
+  },
+  {
+    name: "ejecutar_consulta_salescloser",
+    description:
+      "Ejecuta un SELECT de solo lectura en SalesCloser y devuelve una muestra (vista previa antes de exportar Excel).",
+    handlerKey: "ejecutar_consulta_salescloser",
+    parameters: {
+      type: "object",
+      properties: {
+        query_sql: { type: "string", description: "Consulta SELECT válida" },
+        limite: { type: "number", description: "Filas de muestra (default 100)" },
+      },
+      required: ["query_sql"],
     },
   },
   {
@@ -503,34 +594,67 @@ async function main() {
   const salesCloserContext = {
     nombre: "SalesCloser AI",
     tablas: {
-      calls: ["id", "customer_name", "agent_id", "campaign_id", "created_at"],
-      call_transcripts: ["call_id", "content"],
+      calls: [
+        "id",
+        "customer_name",
+        "customer_document",
+        "agent_id",
+        "campaign_id",
+        "campana",
+        "channel",
+        "is_flagged",
+        "created_at",
+      ],
+      campaigns: ["id", "name", "description", "parent_id", "is_active"],
+      users: ["id", "name", "email"],
       call_evaluations: ["call_id", "compliance_score", "data"],
-      campaigns: ["id", "name", "is_active"],
-      escalations: ["id", "call_id", "status", "level", "reason"],
+      call_transcripts: ["call_id", "content"],
+      escalations: ["id", "call_id", "status", "level", "reason", "created_at"],
+      supervisor_criteria: ["id", "campaign_id", "title", "prompt", "weight", "is_active"],
     },
     funciones_disponibles: [
       "listar_campanas",
+      "listar_criterios_campana",
+      "buscar_criterio_campana",
       "buscar_llamadas",
       "obtener_detalle_llamada",
       "obtener_transcripcion_llamada",
       "resumen_evaluacion_llamada",
+      "obtener_esquema_salescloser",
+      "ejecutar_consulta_salescloser",
+      "exportar_excel_salescloser",
       "reporte_llamadas_excel",
       "listar_escalaciones",
       "obtener_reporte_estadisticas",
     ],
+    reportes: {
+      recomendado: "exportar_excel_salescloser(query_sql) con SELECT personalizado",
+      ejemplo_nombres_llamadas: "SELECT customer_name AS nombre FROM calls ORDER BY created_at DESC",
+      esquema: "obtener_esquema_salescloser() si necesitas confirmar columnas",
+    },
   };
 
   const salesCloserPrompt = `Eres un asistente interno de SalesCloser / Qontrol.
-Respondes en español. Ayudas a supervisores y operadores a consultar llamadas, campañas, transcripciones, evaluaciones y escalaciones.
+Respondes en español. Ayudas a supervisores y operadores a consultar llamadas, campañas, criterios de evaluación, transcripciones, evaluaciones, escalaciones y reportes Excel.
 
 IMPORTANTE: Tú decides cuándo usar cada herramienta. Para datos reales SIEMPRE invoca la tool adecuada antes de responder.
-- Resumen, score, criterios, acústica o chat de una llamada → obtener_detalle_llamada(call_id, seccion)
+- Criterios de una campaña (ej. "¿qué criterios tiene BBVA?") → listar_criterios_campana(campana) sin prompts
+- Prompt de un criterio concreto (ej. "Tono de voz alta") → buscar_criterio_campana(nombre)
+- Resumen, score, criterios evaluados en una llamada → obtener_detalle_llamada(call_id, seccion)
+- Si piden UN solo dato (ej. "solo la campaña", "solo el agente") → obtener_detalle_llamada(call_id, seccion="campana"|"agente"|"score"|etc.) y responde brevemente solo eso
 - Solo transcripción → obtener_transcripcion_llamada
 - Buscar por fechas/cliente → buscar_llamadas
-- Excel de llamadas → reporte_llamadas_excel
+- Excel / exportar / reporte personalizado → exportar_excel_salescloser(query_sql). Si no estás seguro de columnas → obtener_esquema_salescloser()
+- Vista previa de datos SQL → ejecutar_consulta_salescloser(query_sql)
+- Excel simple por fechas (plantilla fija) → reporte_llamadas_excel
 
-Nunca inventes IDs, scores ni URLs. Resume los resultados de las tools en lenguaje claro para el usuario.`;
+REGLAS DE REPORTES:
+1. NUNCA digas "el backend generará" ni expliques el proceso sin ejecutar la herramienta.
+2. Si piden Excel, DEBES llamar exportar_excel_salescloser (o reporte_llamadas_excel si solo piden fechas).
+3. Construye el SQL según lo pedido (ej. solo nombres → SELECT customer_name FROM calls).
+4. Cuando la tool devuelva url, inclúyela en la respuesta como enlace de descarga.
+
+Nunca inventes IDs, scores, prompts ni URLs. Resume los resultados de las tools en lenguaje claro para el usuario.`;
 
   const salesProject = await prisma.project.upsert({
     where: { id: "demo-salescloser" },
