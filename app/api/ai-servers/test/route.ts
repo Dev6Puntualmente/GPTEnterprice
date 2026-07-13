@@ -1,17 +1,32 @@
 import { NextResponse } from "next/server";
-import { getHfToken } from "@/lib/env";
+import { resolveEffectiveApiKey } from "@/lib/env";
 import { requireAuth } from "@/lib/require-auth";
+import { resolveUserLlmEndpoint } from "@/lib/server-config-access";
 
 export async function POST(request: Request) {
-  const { error } = await requireAuth();
+  const { session, error } = await requireAuth();
   if (error) return error;
 
   const body = await request.json();
   const baseUrl = body.baseUrl?.replace(/\/$/, "");
-  const apiKey = getHfToken() ?? "not-needed";
+  const apiKeyFromBody = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
 
   if (!baseUrl) {
     return NextResponse.json({ error: "baseUrl es requerido" }, { status: 400 });
+  }
+
+  const endpoint = apiKeyFromBody ? null : await resolveUserLlmEndpoint(session.user.id);
+  const apiKey = resolveEffectiveApiKey(apiKeyFromBody || endpoint?.apiKey);
+
+  if (!apiKey) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error:
+          "Falta la API Key de vLLM. Configúrala en Ajustes → Proveedor de IA (debe coincidir con --api-key del servidor).",
+      },
+      { status: 401 },
+    );
   }
 
   try {
@@ -20,9 +35,19 @@ export async function POST(request: Request) {
       signal: AbortSignal.timeout(8000),
     });
 
+    if (response.status === 401 || response.status === 403) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "API Key de vLLM rechazada (HTTP 401). Debe coincidir con --api-key del servidor.",
+        },
+        { status: 401 },
+      );
+    }
+
     if (!response.ok) {
       return NextResponse.json(
-        { ok: false, error: `HTTP ${response.status}` },
+        { ok: false, error: `vLLM respondió HTTP ${response.status}` },
         { status: 502 },
       );
     }

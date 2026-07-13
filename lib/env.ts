@@ -1,6 +1,21 @@
+/** Bearer de vLLM (--api-key). VLLM_API_KEY tiene prioridad sobre HF_TOKEN (legacy). */
+export function getVllmApiKey(): string | undefined {
+  const vllm = process.env.VLLM_API_KEY?.trim();
+  if (vllm) return vllm;
+  const legacy = process.env.HF_TOKEN?.trim();
+  return legacy || undefined;
+}
+
+/** @deprecated Usar getVllmApiKey — HF_TOKEN se confundía con el token de Hub. */
 export function getHfToken(): string | undefined {
-  const token = process.env.HF_TOKEN?.trim();
-  return token || undefined;
+  return getVllmApiKey();
+}
+
+/** Primero BD (Ajustes), luego VLLM_API_KEY / HF_TOKEN del entorno. */
+export function resolveEffectiveApiKey(storedKey?: string | null): string | undefined {
+  const fromDb = storedKey?.trim();
+  if (fromDb) return fromDb;
+  return getVllmApiKey();
 }
 
 /** Usar 127.0.0.1 evita fallos con localhost/IPv6/0.0.0.0 en Windows. */

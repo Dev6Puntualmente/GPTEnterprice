@@ -1,6 +1,245 @@
 import { hash } from "bcryptjs";
+import { Prisma } from "@/generated/prisma/client";
 import { UserRole } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
+
+type SeedTool = {
+  name: string;
+  description: string;
+  handlerKey: string;
+  parameters: Prisma.InputJsonValue;
+};
+
+async function upsertProjectTools(projectId: string, tools: SeedTool[]) {
+  for (const tool of tools) {
+    await prisma.tool.upsert({
+      where: { projectId_name: { projectId, name: tool.name } },
+      update: {
+        description: tool.description,
+        parameters: tool.parameters,
+        handlerKey: tool.handlerKey,
+        isActive: true,
+      },
+      create: {
+        projectId,
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+        handlerKey: tool.handlerKey,
+      },
+    });
+  }
+}
+
+const CRM_TOOLS: SeedTool[] = [
+  {
+    name: "crm_buscar_clientes",
+    description: "Busca clientes por nombre, documento, ciudad o estado.",
+    handlerKey: "crm_buscar_clientes",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        documento: { type: "string" },
+        ciudad: { type: "string" },
+        estado: { type: "string" },
+        limite: { type: "number" },
+      },
+    },
+  },
+  {
+    name: "crm_buscar_usuarios",
+    description: "Busca usuarios/agentes del CRM.",
+    handlerKey: "crm_buscar_usuarios",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        role: { type: "string" },
+        solo_activos: { type: "boolean" },
+        limite: { type: "number" },
+      },
+    },
+  },
+  {
+    name: "crm_listar_gestiones",
+    description: "Lista gestiones por cédula, cliente, asesor o fechas. Usa solo_ultima=true para la más reciente.",
+    handlerKey: "crm_listar_gestiones",
+    parameters: {
+      type: "object",
+      properties: {
+        documento: { type: "string" },
+        cliente: { type: "string" },
+        asesor: { type: "string" },
+        fecha_inicio: { type: "string" },
+        fecha_fin: { type: "string" },
+        gestion_id: { type: "string" },
+        limite: { type: "number" },
+        solo_ultima: { type: "boolean" },
+      },
+    },
+  },
+  {
+    name: "crm_obtener_gestion",
+    description: "Obtiene una gestión por UUID o alias corto.",
+    handlerKey: "crm_obtener_gestion",
+    parameters: {
+      type: "object",
+      properties: { gestion_id: { type: "string" } },
+      required: ["gestion_id"],
+    },
+  },
+  {
+    name: "crm_dashboard_resumen",
+    description: "Métricas resumidas del dashboard: gestiones, clientes nuevos, agentes online.",
+    handlerKey: "crm_dashboard_resumen",
+    parameters: {
+      type: "object",
+      properties: {
+        fecha_inicio: { type: "string" },
+        fecha_fin: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "crm_listar_arboles_tipificacion",
+    description: "Lista árboles de tipificación (config.trees).",
+    handlerKey: "crm_listar_arboles_tipificacion",
+    parameters: {
+      type: "object",
+      properties: {
+        solo_activos: { type: "boolean" },
+        nombre: { type: "string" },
+        limite: { type: "number" },
+      },
+    },
+  },
+  {
+    name: "crm_arbol_capas",
+    description: "Capas/catálogos de un árbol de tipificación ordenadas por nivel.",
+    handlerKey: "crm_arbol_capas",
+    parameters: {
+      type: "object",
+      properties: {
+        tree_id: { type: "string" },
+        nombre_arbol: { type: "string" },
+        solo_activas: { type: "boolean" },
+      },
+    },
+  },
+  {
+    name: "crm_listar_flujos",
+    description: "Flujos nombrados de un árbol con sus pasos.",
+    handlerKey: "crm_listar_flujos",
+    parameters: {
+      type: "object",
+      properties: {
+        tree_id: { type: "string" },
+        nombre_arbol: { type: "string" },
+        nombre_flujo: { type: "string" },
+        limite: { type: "number" },
+      },
+    },
+  },
+  {
+    name: "crm_buscar_items_capa",
+    description: "Busca ítems dentro de una capa del árbol de tipificación.",
+    handlerKey: "crm_buscar_items_capa",
+    parameters: {
+      type: "object",
+      properties: {
+        catalog_id: { type: "string" },
+        nombre_capa: { type: "string" },
+        tree_id: { type: "string" },
+        query: { type: "string" },
+        limite: { type: "number" },
+      },
+    },
+  },
+  {
+    name: "crm_dashboard_whatsapp",
+    description: "Dashboard WhatsApp: chats activos, mensajes y distribución por estado.",
+    handlerKey: "crm_dashboard_whatsapp",
+    parameters: {
+      type: "object",
+      properties: {
+        fecha_inicio: { type: "string" },
+        fecha_fin: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "crm_dashboard_tipologico",
+    description: "Distribución tipológica de gestiones por canal, acción y resultado.",
+    handlerKey: "crm_dashboard_tipologico",
+    parameters: {
+      type: "object",
+      properties: {
+        fecha_inicio: { type: "string" },
+        fecha_fin: { type: "string" },
+        limite: { type: "number" },
+      },
+    },
+  },
+  {
+    name: "crm_reporte_estados_agentes",
+    description: "Auditoría de cambios de estado de agentes (online, pausa, etc.).",
+    handlerKey: "crm_reporte_estados_agentes",
+    parameters: {
+      type: "object",
+      properties: {
+        fecha_inicio: { type: "string" },
+        fecha_fin: { type: "string" },
+        agente: { type: "string" },
+        limite: { type: "number" },
+      },
+    },
+  },
+  {
+    name: "crm_listar_conexiones",
+    description: "Lista conexiones/canales activos del CRM.",
+    handlerKey: "crm_listar_conexiones",
+    parameters: {
+      type: "object",
+      properties: {
+        solo_activas: { type: "boolean" },
+        limite: { type: "number" },
+      },
+    },
+  },
+  {
+    name: "generar_poster_alerta",
+    description: "Genera un poster visual en SVG (alerta, info, éxito). Devuelve imagen para ver o descargar.",
+    handlerKey: "generar_poster_alerta",
+    parameters: {
+      type: "object",
+      properties: {
+        titulo: { type: "string" },
+        mensaje: { type: "string" },
+        subtitulo: { type: "string" },
+        tema: { type: "string" },
+        pie_pagina: { type: "string" },
+      },
+      required: ["titulo", "mensaje"],
+    },
+  },
+  {
+    name: "crm_resumen_estadisticas",
+    description: "Estadísticas globales del CRM.",
+    handlerKey: "crm_resumen_estadisticas",
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "ejecutar_consulta_crm",
+    description: "SQL SELECT de solo lectura en el CRM.",
+    handlerKey: "ejecutar_consulta_crm",
+    parameters: {
+      type: "object",
+      properties: { query_sql: { type: "string" } },
+      required: ["query_sql"],
+    },
+  },
+];
 
 const RRHH_CONTEXT = {
   nombre: "Proyecto RRHH",
@@ -53,6 +292,10 @@ async function main() {
         name: "Phi 3.5",
         baseUrl: process.env.VLLM_URL ?? "http://localhost:8002/v1",
         modelName: process.env.VLLM_MODEL ?? "Phi-3.5-mini-instruct",
+        apiKey:
+          process.env.VLLM_API_KEY?.trim() ||
+          process.env.HF_TOKEN?.trim() ||
+          null,
         role: "GENERAL",
         color: "#8b5cf6",
         isDefault: true,
@@ -250,12 +493,127 @@ Si el usuario pide un Excel, el sistema lo genera en segundo plano: no inventes 
               },
             },
           },
+          {
+            name: "obtener_reporte_estadisticas",
+            description: "Obtiene estadísticas agregadas de llamadas (total, promedios, sentiment, marcadas) y detalles simplificados, con soporte para filtrado.",
+            handlerKey: "obtener_reporte_estadisticas",
+            parameters: {
+              type: "object",
+              properties: {
+                fecha_inicio: { type: "string", description: "YYYY-MM-DD. Opcional (por defecto busca los últimos 30 días)" },
+                fecha_fin: { type: "string", description: "YYYY-MM-DD" },
+                campana: { type: "string", description: "Filtrar por nombre parcial de campaña (opcional)" },
+                agente: { type: "string", description: "Filtrar por nombre parcial de agente/asesor (opcional)" },
+                min_score: { type: "number", description: "Score mínimo de compliance (opcional)" },
+                max_score: { type: "number", description: "Score máximo de compliance (opcional)" },
+              },
+            },
+          },
         ],
       },
     },
   });
 
   console.log(`Proyecto SalesCloser: ${salesProject.name} (${salesProject.id})`);
+
+  // ── Proyecto CRM ──────────────────────────────────────────────────────────
+  const crmSystemPrompt = `Eres un asistente inteligente del CRM empresarial.
+Respondes siempre en español con claridad y precisión.
+
+Puedes consultar:
+- Clientes y usuarios/agentes
+- Gestiones (historial, última gestión por cédula, gestión por ID/alias)
+- Dashboard (métricas por periodo)
+- Árboles de tipificación, capas, flujos e ítems de catálogo
+
+Para SQL personalizado usa ejecutar_consulta_crm (solo SELECT).
+Nunca inventes datos. Si no hay resultados, dilo claramente.`;
+
+  const crmContext = {
+    nombre: "CRM Empresarial",
+    esquemas: {
+      "crm.clients": ["id", "document_type", "document_number", "full_name", "email", "phone", "city", "department", "client_type", "client_status", "preferred_channel", "created_at"],
+      "crm.users": ["id", "username", "email", "full_name", "role", "position", "is_active", "is_online", "phone", "created_at"],
+      "whatsapp.whatsapp_chats": ["id", "phone", "name", "status", "last_message_at", "document_number", "created_at"],
+      "whatsapp.whatsapp_messages": ["id", "chat_id", "sender", "message_type", "content", "created_at"],
+    },
+    herramientas: [
+      "crm_buscar_clientes",
+      "crm_buscar_usuarios",
+      "crm_listar_gestiones",
+      "crm_obtener_gestion",
+      "crm_dashboard_resumen",
+      "crm_listar_arboles_tipificacion",
+      "crm_arbol_capas",
+      "crm_listar_flujos",
+      "crm_buscar_items_capa",
+      "crm_resumen_estadisticas",
+      "ejecutar_consulta_crm",
+    ],
+  };
+
+  const crmProject = await prisma.project.upsert({
+    where: { id: "demo-crm" },
+    update: {
+      ownerId: admin.id,
+      name: "CRM Empresarial",
+      description: "Consultas de clientes, gestiones, tipificación y dashboard del CRM",
+      systemPrompt: crmSystemPrompt,
+      contextJson: crmContext,
+    },
+    create: {
+      id: "demo-crm",
+      ownerId: admin.id,
+      name: "CRM Empresarial",
+      description: "Consultas de clientes, gestiones, tipificación y dashboard del CRM",
+      systemPrompt: crmSystemPrompt,
+      contextJson: crmContext,
+      tools: {
+        create: CRM_TOOLS.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          handlerKey: tool.handlerKey,
+          parameters: tool.parameters,
+        })),
+      },
+    },
+  });
+
+  console.log(`Proyecto CRM: ${crmProject.name} (${crmProject.id})`);
+
+  await upsertProjectTools("demo-crm", CRM_TOOLS);
+  await upsertProjectTools("demo-salescloser", [
+    {
+      name: "generar_poster_alerta",
+      description: "Genera poster visual en SVG para avisos internos.",
+      handlerKey: "generar_poster_alerta",
+      parameters: {
+        type: "object",
+        properties: {
+          titulo: { type: "string" },
+          mensaje: { type: "string" },
+          tema: { type: "string" },
+        },
+        required: ["titulo", "mensaje"],
+      },
+    },
+  ]);
+  await upsertProjectTools("demo-rrhh", [
+    {
+      name: "generar_poster_alerta",
+      description: "Genera poster visual en SVG para comunicados internos.",
+      handlerKey: "generar_poster_alerta",
+      parameters: {
+        type: "object",
+        properties: {
+          titulo: { type: "string" },
+          mensaje: { type: "string" },
+          tema: { type: "string" },
+        },
+        required: ["titulo", "mensaje"],
+      },
+    },
+  ]);
 }
 
 main()

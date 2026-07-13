@@ -8,6 +8,14 @@ import GlassCard from "@/app/components/ui/GlassCard";
 import { useTheme } from "@/app/components/theme/ThemeProvider";
 import type { BackgroundJob, MessageMetadata } from "@/lib/types";
 
+const STREAMING_STORAGE_KEY = "gptenterprice-streaming";
+
+function looksLikeToolRequest(text: string): boolean {
+  return /busca(?:r|a)|gesti[oó]n|crm\b|llamad|reporte|estad[ií]stica|poster|dashboard|tipific|flujo/i.test(
+    text,
+  );
+}
+
 type Message = {
   id: string;
   role: "USER" | "ASSISTANT" | "TOOL" | "SYSTEM";
@@ -52,8 +60,11 @@ export function ChatWindow({
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [loadingLabel, setLoadingLabel] = useState("Pensando...");
+  const [streamingContent, setStreamingContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [jobStates, setJobStates] = useState<Record<string, JobRuntimeState>>({});
+  const [streamingEnabled, setStreamingEnabled] = useState(true);
+  const [streamHint, setStreamHint] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pollingRef = useRef<Record<string, ReturnType<typeof setInterval>>>({});
   const conversationIdRef = useRef(conversationId);
@@ -182,26 +193,39 @@ export function ChatWindow({
   }, [conversation, pollJob]);
 
   useEffect(() => {
+    try {
+      const stored = localStorage.getItem(STREAMING_STORAGE_KEY);
+      if (stored !== null) setStreamingEnabled(stored === "true");
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
     return () => {
       Object.values(pollingRef.current).forEach(clearInterval);
       pollingRef.current = {};
     };
   }, []);
 
+  const visibleMessages = conversation?.messages.filter((m) => m.role !== "TOOL") ?? [];
+  const isBusy = loading || streamingContent !== null;
+
   useEffect(() => {
     const container = scrollRef.current;
     if (!container) return;
     container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
-  }, [conversation?.messages, loading, jobStates]);
+  }, [conversation?.messages, loading, jobStates, streamingContent]);
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    if (!input.trim() || loading) return;
+    if (!input.trim() || isBusy) return;
 
     const userText = input.trim();
     setInput("");
     setLoading(true);
-    setLoadingLabel("Pensando...");
+    setLoadingLabel(looksLikeToolRequest(userText) ? "Consultando datos..." : "Pensando...");
+    setStreamHint(null);
     setError(null);
 
     const optimisticMessage: Message = {
@@ -222,50 +246,125 @@ export function ChatWindow({
     );
 
     try {
-      const response = await fetch("/api/chat", {
+      const response = await fetch("/api/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           conversationId: conversationId ?? undefined,
           projectId,
           message: userText,
+          stream: true,
         }),
       });
 
-      const data = await response.json().catch(() => null);
-      if (!response.ok) {
-        const target = data?.chatUrl ?? data?.agentApiUrl;
-        const message = data?.detail
-          ? `${data.error ?? "Error al enviar mensaje"}: ${data.detail}${target ? ` (${target})` : ""}`
-          : data?.error ?? `Error HTTP ${response.status}${target ? ` (${target})` : ""}`;
-        throw new Error(message);
-      }
+      const contentType = response.headers.get("content-type") ?? "";
 
-      if (!conversationId) onConversationCreated(data.conversationId);
+      if (contentType.includes("text/event-stream") && response.body) {
+        const animateTokens = streamingEnabled;
+        if (animateTokens) {
+          setLoading(false);
+          setStreamingContent("");
+        }
 
-      await refreshConversation(data.conversationId);
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let resolvedConversationId = conversationId ?? null;
+        let pendingJob: BackgroundJob | null = null;
+        let assistantMessageId: string | null = null;
 
-      if (data.pendingJob?.id && data.message?.id) {
-        setLoadingLabel("Generando archivo...");
-        pollJob(data.pendingJob.id, data.message.id);
-        setJobStates((current) => ({
-          ...current,
-          [data.pendingJob.id]: {
-            status: data.pendingJob.status,
-            progress: data.pendingJob.progress ?? 8,
-            stage: data.pendingJob.stage ?? "En cola...",
-          },
-        }));
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop() ?? "";
+
+          for (const part of parts) {
+            const line = part.split("\n").find((entry) => entry.startsWith("data: "));
+            if (!line) continue;
+            try {
+              const event = JSON.parse(line.slice(6)) as {
+                type: string;
+                content?: string;
+                conversationId?: string;
+                message?: any;
+                pendingJob?: BackgroundJob | null;
+              };
+
+              if (event.type === "token" && event.content) {
+                if (animateTokens) {
+                  setStreamingContent((current) => (current ?? "") + event.content);
+                }
+              } else if (event.type === "error" && event.message) {
+                throw new Error(String(event.message));
+              } else if (event.type === "done") {
+                resolvedConversationId = event.conversationId ?? resolvedConversationId;
+                assistantMessageId = event.message?.id ?? null;
+                pendingJob = event.pendingJob ?? null;
+              }
+            } catch {
+              // ignorar fragmentos SSE incompletos
+            }
+          }
+        }
+
+        setStreamingContent(null);
+        setLoading(false);
+
+        if (resolvedConversationId) {
+          if (!conversationId) onConversationCreated(resolvedConversationId);
+          await refreshConversation(resolvedConversationId);
+        }
+
+        if (pendingJob?.id && assistantMessageId) {
+          setLoadingLabel("Generando archivo...");
+          pollJob(pendingJob.id, assistantMessageId);
+          setJobStates((current) => ({
+            ...current,
+            [pendingJob!.id]: {
+              status: pendingJob!.status,
+              progress: pendingJob!.progress ?? 8,
+              stage: pendingJob!.stage ?? "En cola...",
+            },
+          }));
+        }
+      } else {
+        const data = await response.json().catch(() => null);
+        if (!response.ok) {
+          const target = data?.chatUrl ?? data?.agentApiUrl;
+          const message = data?.detail
+            ? `${data.error ?? "Error al enviar mensaje"}: ${data.detail}${target ? ` (${target})` : ""}`
+            : data?.error ?? `Error HTTP ${response.status}${target ? ` (${target})` : ""}`;
+          throw new Error(message);
+        }
+
+        if (!conversationId) onConversationCreated(data.conversationId);
+
+        await refreshConversation(data.conversationId);
+
+        if (data.pendingJob?.id && data.message?.id) {
+          setLoadingLabel("Generando archivo...");
+          pollJob(data.pendingJob.id, data.message.id);
+          setJobStates((current) => ({
+            ...current,
+            [data.pendingJob.id]: {
+              status: data.pendingJob.status,
+              progress: data.pendingJob.progress ?? 8,
+              stage: data.pendingJob.stage ?? "En cola...",
+            },
+          }));
+        }
       }
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Error desconocido");
     } finally {
       setLoading(false);
       setLoadingLabel("Pensando...");
+      setStreamHint(null);
     }
   }
-
-  const visibleMessages = conversation?.messages.filter((m) => m.role !== "TOOL") ?? [];
 
   return (
     <GlassCard className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -282,11 +381,34 @@ export function ChatWindow({
               {conversation?.project.name ?? "Chat"}
             </h2>
           </div>
-          <div
-            className="rounded-full px-3 py-1 text-[11px] font-medium"
-            style={{ background: colors.accentSoft, color: colors.accent }}
-          >
-            {conversation?.project.tools.length ?? 0} tools
+          <div className="flex items-center gap-2">
+            <label
+              className="flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1 text-[11px]"
+              style={{ borderColor: colors.border, color: colors.textSoft }}
+              title="Híbrido automático: chat con streaming y tools sin cambiar este interruptor."
+            >
+              <input
+                type="checkbox"
+                checked={streamingEnabled}
+                onChange={(e) => {
+                  const next = e.target.checked;
+                  setStreamingEnabled(next);
+                  try {
+                    localStorage.setItem(STREAMING_STORAGE_KEY, String(next));
+                  } catch {
+                    // ignore
+                  }
+                }}
+                className="accent-violet-500"
+              />
+              Animación
+            </label>
+            <div
+              className="rounded-full px-3 py-1 text-[11px] font-medium"
+              style={{ background: colors.accentSoft, color: colors.accent }}
+            >
+              {conversation?.project.tools.length ?? 0} tools
+            </div>
           </div>
         </div>
       </div>
@@ -334,6 +456,10 @@ export function ChatWindow({
           );
         })}
 
+        {streamingContent !== null ? (
+          <ChatMessageBubble role="ASSISTANT" content={streamingContent} isStreaming />
+        ) : null}
+
         {loading ? (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex justify-start">
             <div
@@ -355,6 +481,15 @@ export function ChatWindow({
         ) : null}
       </div>
 
+      {streamHint ? (
+        <div
+          className="mx-4 mb-2 rounded-2xl px-3 py-2 text-xs backdrop-blur-md md:mx-5"
+          style={{ color: colors.textSoft, background: `${colors.accent}12`, border: `1px solid ${colors.border}` }}
+        >
+          {streamHint}
+        </div>
+      ) : null}
+
       {error ? (
         <div
           className="mx-4 mb-2 rounded-2xl px-3 py-2 text-sm backdrop-blur-md md:mx-5"
@@ -374,7 +509,7 @@ export function ChatWindow({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Escribe tu mensaje..."
-            disabled={loading}
+            disabled={isBusy}
             className="flex-1 rounded-2xl border px-4 py-3 text-sm outline-none backdrop-blur-md transition focus:ring-2"
             style={{
               borderColor: colors.border,
@@ -383,7 +518,7 @@ export function ChatWindow({
               boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05)",
             }}
           />
-          <GlassButton type="submit" disabled={loading || !input.trim()} className="px-5">
+          <GlassButton type="submit" disabled={isBusy || !input.trim()} className="px-5">
             Enviar
           </GlassButton>
         </div>

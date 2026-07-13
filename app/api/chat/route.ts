@@ -144,7 +144,7 @@ export async function POST(request: Request) {
           ? {
               base_url: llmEndpoint.baseUrl,
               model: llmEndpoint.modelName,
-              api_key: llmEndpoint.apiKey,
+              ...(llmEndpoint.apiKey ? { api_key: llmEndpoint.apiKey } : {}),
             }
           : null,
       }),

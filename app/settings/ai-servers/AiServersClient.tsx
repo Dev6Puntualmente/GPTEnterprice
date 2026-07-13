@@ -16,12 +16,24 @@ type AiServer = {
   color: string;
   enabled: boolean;
   isDefault: boolean;
+  hasApiKey: boolean;
 };
 
-const PHI_DEFAULTS = {
+type ProviderForm = {
+  name: string;
+  baseUrl: string;
+  modelName: string;
+  apiKey: string;
+  color: string;
+  enabled: boolean;
+  isDefault: boolean;
+};
+
+const PHI_DEFAULTS: ProviderForm = {
   name: "Phi 3.5",
   baseUrl: "http://localhost:8002/v1",
   modelName: "Phi-3.5-mini-instruct",
+  apiKey: "",
   color: "#8b5cf6",
   enabled: true,
   isDefault: true,
@@ -32,7 +44,7 @@ export default function AiServersClient() {
   const [server, setServer] = useState<AiServer | null>(null);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState(PHI_DEFAULTS);
+  const [form, setForm] = useState<ProviderForm>(PHI_DEFAULTS);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -55,7 +67,10 @@ export default function AiServersClient() {
       const response = await fetch("/api/ai-servers/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ baseUrl: form.baseUrl }),
+        body: JSON.stringify({
+          baseUrl: form.baseUrl,
+          ...(form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
+        }),
       });
       const data = await response.json();
       setTestResult(data.ok ? "Conexión exitosa ✓" : data.error ?? "Error de conexión");
@@ -72,15 +87,27 @@ export default function AiServersClient() {
 
     const method = server ? "PATCH" : "POST";
     const url = server ? `/api/ai-servers/${server.id}` : "/api/ai-servers";
+    const payload: Record<string, unknown> = {
+      name: form.name,
+      baseUrl: form.baseUrl,
+      modelName: form.modelName,
+      color: form.color,
+      enabled: form.enabled,
+      isDefault: form.isDefault,
+    };
+    if (form.apiKey.trim()) {
+      payload.apiKey = form.apiKey.trim();
+    }
 
     await fetch(url, {
       method,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
+      body: JSON.stringify(payload),
     });
 
     setSaving(false);
     setShowForm(false);
+    setForm((current) => ({ ...current, apiKey: "" }));
     loadServer();
   }
 
@@ -92,11 +119,13 @@ export default function AiServersClient() {
         name: server.name,
         baseUrl: server.baseUrl,
         modelName: server.modelName,
+        apiKey: "",
         color: server.color,
         enabled: server.enabled,
         isDefault: server.isDefault,
       });
     }
+    setTestResult(null);
     setShowForm(true);
   }
 
@@ -112,7 +141,7 @@ export default function AiServersClient() {
               Proveedor de IA
             </h1>
             <p className="text-sm" style={{ color: colors.textSoft }}>
-              Phi 3.5 — un solo modelo para chat y herramientas
+              URL, modelo y API Key vLLM — configurable por usuario
             </p>
           </div>
           <ThemeToggle />
@@ -120,8 +149,8 @@ export default function AiServersClient() {
 
         <GlassCard className="mb-4 p-4">
           <p className="text-sm" style={{ color: colors.textSoft }}>
-            El token de Hugging Face se configura en <code className="font-mono">HF_TOKEN</code> dentro de tu archivo{" "}
-            <code className="font-mono">.env</code>. Se envía automáticamente en cada petición al servidor VLLM.
+            La API Key de vLLM (la misma que --api-key al lanzar el servidor) se guarda aquí, asociada a tu cuenta.
+            Ya no hace falta ponerlo en <code className="font-mono">.env</code>.
           </p>
         </GlassCard>
 
@@ -161,6 +190,10 @@ export default function AiServersClient() {
               {server.baseUrl}
             </p>
 
+            <p className="mt-2 text-xs" style={{ color: colors.textSoft }}>
+              API Key vLLM: {server.hasApiKey ? "configurada ✓" : "no configurada"}
+            </p>
+
             <div className="mt-4">
               <button
                 type="button"
@@ -175,7 +208,7 @@ export default function AiServersClient() {
         ) : (
           <GlassCard className="p-8 text-center">
             <p className="mb-4" style={{ color: colors.textSoft }}>
-              No hay proveedor configurado. Agrega Phi 3.5 para empezar a chatear.
+              No hay proveedor configurado. Agrega tu servidor vLLM para empezar a chatear.
             </p>
             <motion.button
               whileHover={{ scale: 1.03 }}
@@ -184,7 +217,7 @@ export default function AiServersClient() {
               className="rounded-xl px-4 py-2.5 text-sm font-semibold text-white"
               style={{ background: colors.accent, boxShadow: `0 8px 24px ${colors.glow}` }}
             >
-              Configurar Phi 3.5
+              Configurar proveedor
             </motion.button>
           </GlassCard>
         )}
@@ -210,7 +243,7 @@ export default function AiServersClient() {
               onClick={(event) => event.stopPropagation()}
             >
               <h2 className="mb-4 text-lg font-semibold" style={{ color: colors.text }}>
-                {server ? "Editar proveedor Phi" : "Configurar proveedor Phi"}
+                {server ? "Editar proveedor" : "Configurar proveedor"}
               </h2>
 
               <form onSubmit={handleSubmit} className="space-y-3">
@@ -218,7 +251,7 @@ export default function AiServersClient() {
                   required
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  placeholder="Nombre (ej. Phi 3.5 Local)"
+                  placeholder="Nombre (ej. Qwen remoto)"
                   className="w-full rounded-xl border px-4 py-2.5 text-sm"
                   style={{ borderColor: colors.border, background: colors.panelAlt, color: colors.text }}
                 />
@@ -226,7 +259,7 @@ export default function AiServersClient() {
                   required
                   value={form.baseUrl}
                   onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
-                  placeholder="URL base (http://localhost:8002/v1)"
+                  placeholder="URL base (http://148.251.183.33:8080/v1)"
                   className="w-full rounded-xl border px-4 py-2.5 text-sm font-mono"
                   style={{ borderColor: colors.border, background: colors.panelAlt, color: colors.text }}
                 />
@@ -234,8 +267,21 @@ export default function AiServersClient() {
                   required
                   value={form.modelName}
                   onChange={(e) => setForm({ ...form, modelName: e.target.value })}
-                  placeholder="Nombre del modelo (Phi-3.5-mini-instruct)"
+                  placeholder="Nombre del modelo (Qwen/Qwen2.5-3B-Instruct)"
                   className="w-full rounded-xl border px-4 py-2.5 text-sm"
+                  style={{ borderColor: colors.border, background: colors.panelAlt, color: colors.text }}
+                />
+                <input
+                  type="password"
+                  value={form.apiKey}
+                  onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
+                  placeholder={
+                    server?.hasApiKey
+                      ? "API Key vLLM (deja vacío para mantener la actual)"
+                      : "API Key vLLM — la misma que --api-key al lanzar el servidor"
+                  }
+                  autoComplete="off"
+                  className="w-full rounded-xl border px-4 py-2.5 text-sm font-mono"
                   style={{ borderColor: colors.border, background: colors.panelAlt, color: colors.text }}
                 />
 

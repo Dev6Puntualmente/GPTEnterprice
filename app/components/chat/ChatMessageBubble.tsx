@@ -3,12 +3,14 @@
 import { motion } from "framer-motion";
 import { BuildingFileCard } from "@/app/components/chat/BuildingFileCard";
 import { useTheme } from "@/app/components/theme/ThemeProvider";
+import { Markdown } from "@/app/components/chat/Markdown";
 import type { BackgroundJobSnapshot, MessageMetadata } from "@/lib/types";
 
 type ChatMessageBubbleProps = {
   role: "USER" | "ASSISTANT";
   content: string;
   metadata?: MessageMetadata | null;
+  isStreaming?: boolean;
   jobState?: {
     progress?: number;
     stage?: string;
@@ -22,6 +24,7 @@ export function ChatMessageBubble({
   role,
   content,
   metadata,
+  isStreaming = false,
   jobState,
 }: ChatMessageBubbleProps) {
   const { colors } = useTheme();
@@ -59,7 +62,17 @@ export function ChatMessageBubble({
               }
         }
       >
-        <p className="whitespace-pre-wrap">{content}</p>
+        <div className="relative">
+          <Markdown content={content} />
+          {isStreaming ? (
+            <motion.span
+              className="ml-0.5 inline-block h-4 w-0.5 align-middle"
+              style={{ background: colors.accent }}
+              animate={{ opacity: [1, 0.2, 1] }}
+              transition={{ duration: 0.8, repeat: Infinity }}
+            />
+          ) : null}
+        </div>
 
         {showJobCard && pendingJob ? (
           <BuildingFileCard
@@ -79,22 +92,45 @@ export function ChatMessageBubble({
         ) : null}
 
         {!pendingJob &&
-          files.map((url) => (
-            <a
-              key={url}
-              href={url}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-3 inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium"
-              style={{
-                background: `${colors.success}18`,
-                color: colors.success,
-                border: `1px solid ${colors.success}33`,
-              }}
-            >
-              Descargar Excel
-            </a>
-          ))}
+          files.map((url) => {
+            const isImage = /\.(svg|png|jpe?g|gif|webp)$/i.test(url);
+            if (isImage) {
+              return (
+                <div key={url} className="mt-3 overflow-hidden rounded-2xl border border-white/10 shadow-lg max-w-full bg-white/5">
+                  <img
+                    src={url}
+                    alt="Archivo Generado"
+                    className="w-full max-h-[320px] object-contain"
+                  />
+                  <a
+                    href={url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block text-center py-1.5 text-xs font-medium hover:bg-white/10 border-t border-white/10 transition-colors"
+                    style={{ color: colors.textSoft }}
+                  >
+                    Abrir en nueva pestaña
+                  </a>
+                </div>
+              );
+            }
+            return (
+              <a
+                key={url}
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-3 inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium"
+                style={{
+                  background: `${colors.success}18`,
+                  color: colors.success,
+                  border: `1px solid ${colors.success}33`,
+                }}
+              >
+                Descargar Excel
+              </a>
+            );
+          })}
 
         {metadata?.model_used ? (
           <p className="mt-2 text-[10px] opacity-50">{metadata.model_used}</p>

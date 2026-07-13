@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import logging
-import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from openai import APIConnectionError, AuthenticationError, BadRequestError, NotFoundError
 from pydantic import BaseModel
 
@@ -28,25 +27,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.on_event("startup")
-def on_startup() -> None:
-    logger.info(
-        "GPTEnterprice Agent v2 listo — rutas: /health /tools /chat /jobs /files/{filename}"
-    )
-
-
 STORAGE_DIR = Path(settings.storage_dir)
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-
-
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    started = time.perf_counter()
-    logger.info("→ %s %s", request.method, request.url.path)
-    response = await call_next(request)
-    elapsed_ms = (time.perf_counter() - started) * 1000
-    logger.info("← %s %s %s (%.0fms)", request.method, request.url.path, response.status_code, elapsed_ms)
-    return response
 
 
 class LlmEndpointOverride(BaseModel):
@@ -60,6 +42,7 @@ class ChatRequest(BaseModel):
     messages: list[dict[str, Any]]
     tools: list[dict[str, Any]] | None = None
     vllm: LlmEndpointOverride | None = None
+    stream: bool = True
 
 
 class ChatResponse(BaseModel):
@@ -91,7 +74,7 @@ def _tool_names(payload: ChatRequest) -> list[str]:
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "version": "agent-v2-jobs"}
+    return {"status": "ok", "version": "agent-v2-no-loop"}
 
 
 @app.get("/tools")
@@ -138,9 +121,42 @@ def chat(payload: ChatRequest):
     )
 
     from services.intent import detect_heavy_tool_intent
+    from services.stream_policy import resolve_effective_stream
+    from services.sync_tools import detect_sync_tool_intent, run_sync_tool
     from workers.job_runner import enqueue_tool_job
 
-    intent = detect_heavy_tool_intent(payload.messages, _tool_names(payload))
+    tool_names = _tool_names(payload)
+    effective_stream = resolve_effective_stream(
+        payload.stream,
+        payload.messages,
+        tool_names,
+    )
+    if payload.stream and not effective_stream:
+        logger.info("stream desactivado: se usarán tools nativas de vLLM")
+
+    sync_intent = detect_sync_tool_intent(payload.messages, tool_names)
+    if sync_intent:
+        kind = sync_intent.get("type") or sync_intent.get("tool")
+        logger.info("sync intent detectado: %s", kind)
+        result = run_sync_tool(sync_intent, payload.messages)
+        if payload.stream:
+            import json as json_lib
+
+            def sync_stream():
+                payload_done = {
+                    "type": "done",
+                    "model_used": "tool",
+                    "message": result["message"],
+                    "tool_calls": result.get("tool_calls"),
+                    "files": result.get("files"),
+                }
+                yield f"data: {json_lib.dumps({'type': 'token', 'content': result['message']}, ensure_ascii=False)}\n\n"
+                yield f"data: {json_lib.dumps(payload_done, ensure_ascii=False)}\n\n"
+
+            return StreamingResponse(sync_stream(), media_type="text/event-stream")
+        return ChatResponse(**result)
+
+    intent = detect_heavy_tool_intent(payload.messages, tool_names)
     if intent:
         logger.info("intent detectado en FastAPI: %s %s", intent["tool"], intent["args"])
         job = enqueue_tool_job(intent["tool"], intent["label"], intent["args"])
@@ -165,11 +181,28 @@ def chat(payload: ChatRequest):
             },
         )
 
+    # Sync/heavy ya se resolvieron. Stream solo para chat LLM sin tools nativas.
+    if effective_stream:
+        from services.stream_agent import stream_sse_events
+
+        return StreamingResponse(
+            stream_sse_events(
+                payload.messages,
+                payload.system_prompt,
+                payload.vllm.model_dump() if payload.vllm else None,
+            ),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    # Sin stream: loop nativo de tools en vLLM solo si está habilitado.
+    use_native_tools = settings.vllm_tools_enabled and bool(payload.tools)
+
     try:
         result = run_agent(
             messages=payload.messages,
             system_prompt=payload.system_prompt,
-            tools=payload.tools,
+            tools=payload.tools if use_native_tools else None,
             vllm=payload.vllm.model_dump() if payload.vllm else None,
         )
         return ChatResponse(**result)
@@ -189,7 +222,7 @@ def chat(payload: ChatRequest):
         return JSONResponse(
             status_code=502,
             content={
-                "detail": "HF_TOKEN inválido o no autorizado para el servidor LLM. Revisa HF_TOKEN en .env",
+                "detail": "Token inválido o no autorizado para el servidor LLM. Configúralo en Ajustes → Proveedor de IA.",
             },
         )
     except NotFoundError as error:
@@ -216,8 +249,20 @@ def download_file(filename: str):
     filepath = STORAGE_DIR / safe_name
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
+
+    suffix = filepath.suffix.lower()
+    media_type_map = {
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".svg": "image/svg+xml",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".pdf": "application/pdf",
+    }
+    media_type = media_type_map.get(suffix, "application/octet-stream")
+
     return FileResponse(
         path=filepath,
         filename=safe_name,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        media_type=media_type,
     )

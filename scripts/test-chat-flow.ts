@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { prisma } from "../lib/prisma";
-import { getAgentApiUrl, getHfToken } from "../lib/env";
+import { getAgentApiUrl } from "../lib/env";
 import { resolveUserLlmEndpoint } from "../lib/server-config-access";
 
 async function main() {
@@ -30,7 +30,7 @@ async function main() {
         ? {
             base_url: llm.baseUrl,
             model: llm.modelName,
-            api_key: llm.apiKey ?? getHfToken() ?? null,
+            api_key: llm.apiKey ?? null,
           }
         : null,
     }),

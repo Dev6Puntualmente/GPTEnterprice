@@ -16,30 +16,53 @@ def _today() -> str:
     return date.today().isoformat()
 
 
-def listar_campanas(solo_activas: bool = True) -> dict[str, Any]:
-    if solo_activas:
-        query = """
-            SELECT id, name, description, is_active, created_at
-            FROM campaigns
-            WHERE is_active = TRUE
-            ORDER BY name
-            LIMIT 50
-        """
-        rows = fetch_all(query)
-    else:
-        query = """
-            SELECT id, name, description, is_active, created_at
-            FROM campaigns
-            ORDER BY name
-            LIMIT 50
-        """
-        rows = fetch_all(query)
+def listar_campanas(
+    solo_activas: bool | str = True,
+    nombre: str | None = None,
+    nombre_exacto: bool | str = False,
+) -> dict[str, Any]:
+    if isinstance(solo_activas, str):
+        solo_activas = solo_activas.lower() in ("true", "1", "yes")
+    if isinstance(nombre_exacto, str):
+        nombre_exacto = nombre_exacto.lower() in ("true", "1", "yes")
 
+    conditions: list[str] = []
+    params: list[Any] = []
+
+    if solo_activas:
+        conditions.append("is_active = TRUE")
+
+    if nombre:
+        if nombre_exacto:
+            conditions.append("LOWER(name) = LOWER(%s)")
+            params.append(nombre.strip())
+        else:
+            conditions.append("name ILIKE %s")
+            params.append(f"%{nombre.strip()}%")
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    query = f"""
+        SELECT id, name, description, is_active, created_at
+        FROM campaigns
+        {where}
+        ORDER BY name
+        LIMIT 50
+    """
+    rows = fetch_all(query, tuple(params))
+
+    if nombre_exacto and nombre and rows:
+        case_exact = [row for row in rows if str(row.get("name", "")) == nombre.strip()]
+        if case_exact:
+            rows = case_exact
+
+    filtro = f" que coinciden con '{nombre}'" if nombre else ""
     return {
         "success": True,
         "total": len(rows),
         "campanas": rows,
-        "mensaje": f"Encontré {len(rows)} campaña(s)",
+        "filtro_nombre": nombre,
+        "filtro_exacto": nombre_exacto,
+        "mensaje": f"Encontré {len(rows)} campaña(s){filtro}",
     }
 
 
@@ -48,11 +71,60 @@ def buscar_llamadas(
     fecha_fin: str | None = None,
     campana: str | None = None,
     cliente: str | None = None,
-    limite: int = 20,
+    call_id: int | str | float | None = None,
+    limite: int | str | float = 20,
 ) -> dict[str, Any]:
+    try:
+        limite = int(float(limite))
+    except (ValueError, TypeError):
+        limite = 20
     limite = max(1, min(limite, 100))
-    start = fecha_inicio or _today()
-    end = fecha_fin or start
+
+    if call_id is not None:
+        try:
+            call_id = int(float(call_id))
+        except (ValueError, TypeError):
+            return {"success": False, "mensaje": f"ID de llamada inválido: {call_id}"}
+        row = fetch_one(
+            """
+            SELECT
+                c.id,
+                c.customer_name,
+                c.campana,
+                c.channel,
+                c.is_flagged,
+                c.created_at,
+                u.name AS agente,
+                u.email AS agente_email,
+                camp.name AS campana_nombre
+            FROM calls c
+            LEFT JOIN users u ON u.id = c.agent_id
+            LEFT JOIN campaigns camp ON camp.id = c.campaign_id
+            WHERE c.id = %s
+            """,
+            (call_id,),
+        )
+        if not row:
+            return {"success": False, "mensaje": f"No encontré la llamada {call_id}"}
+        return {
+            "success": True,
+            "total": 1,
+            "call_id": call_id,
+            "llamadas": [row],
+            "mensaje": f"Llamada #{call_id} encontrada",
+        }
+
+    # Lógica inteligente de fecha
+    if not fecha_inicio and not fecha_fin:
+        # Default a los últimos 30 días si no se indican fechas
+        from datetime import timedelta
+        end_date = date.today()
+        start_date = end_date - timedelta(days=30)
+        start = start_date.isoformat()
+        end = end_date.isoformat()
+    else:
+        start = fecha_inicio or _today()
+        end = fecha_fin or start
 
     conditions = [
         "c.created_at >= %s::date",
@@ -101,7 +173,12 @@ def buscar_llamadas(
     }
 
 
-def obtener_transcripcion_llamada(call_id: int) -> dict[str, Any]:
+def obtener_transcripcion_llamada(call_id: int | str | float) -> dict[str, Any]:
+    try:
+        call_id = int(float(call_id))
+    except (ValueError, TypeError):
+        return {"success": False, "mensaje": f"ID de llamada inválido: {call_id}"}
+
     call = fetch_one(
         """
         SELECT c.id, c.customer_name, c.created_at, ct.content AS transcript_content
@@ -128,7 +205,12 @@ def obtener_transcripcion_llamada(call_id: int) -> dict[str, Any]:
     }
 
 
-def resumen_evaluacion_llamada(call_id: int) -> dict[str, Any]:
+def resumen_evaluacion_llamada(call_id: int | str | float) -> dict[str, Any]:
+    try:
+        call_id = int(float(call_id))
+    except (ValueError, TypeError):
+        return {"success": False, "mensaje": f"ID de llamada inválido: {call_id}"}
+
     row = fetch_one(
         """
         SELECT
@@ -208,7 +290,14 @@ def reporte_llamadas_excel(
     }
 
 
-def listar_escalaciones(estado: str = "PENDING", limite: int = 20) -> dict[str, Any]:
+def listar_escalaciones(
+    estado: str = "PENDING",
+    limite: int | str | float = 20,
+) -> dict[str, Any]:
+    try:
+        limite = int(float(limite))
+    except (ValueError, TypeError):
+        limite = 20
     limite = max(1, min(limite, 100))
     rows = fetch_all(
         """

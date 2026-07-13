@@ -22,7 +22,7 @@ from tools.registry import execute_tool
 
 def _build_client(base_url: str, api_key: str | None = None) -> OpenAI:
 
-    key = api_key or settings.hf_token or "not-needed"
+    key = api_key or settings.bearer_api_key or "not-needed"
 
     return OpenAI(
         base_url=base_url,
@@ -36,29 +36,21 @@ def _build_client(base_url: str, api_key: str | None = None) -> OpenAI:
 
 
 def _endpoint_from_override(
-
     override: dict[str, Any] | None,
-
     fallback_url: str,
-
     fallback_model: str,
-
     fallback_key: str | None = None,
-
 ) -> tuple[str, str, str | None]:
-
     if not override:
+        return fallback_url, fallback_model, fallback_key or settings.bearer_api_key
 
-        return fallback_url, fallback_model, fallback_key or settings.hf_token
-
+    api_key = override.get("api_key") or fallback_key or settings.bearer_api_key
+    if isinstance(api_key, str) and not api_key.strip():
+        api_key = fallback_key or settings.bearer_api_key
     return (
-
         override.get("base_url") or fallback_url,
-
         override.get("model") or fallback_model,
-
-        override.get("api_key") or fallback_key or settings.hf_token,
-
+        api_key,
     )
 
 
@@ -97,7 +89,7 @@ def run_agent(
 
         settings.vllm_model,
 
-        settings.hf_token,
+        settings.bearer_api_key,
 
     )
 

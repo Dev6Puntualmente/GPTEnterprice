@@ -1,5 +1,6 @@
 import { AiServerType } from "@/generated/prisma/client";
 import { NextResponse } from "next/server";
+import { resolveApiKeyFromBody, sanitizeAiServer } from "@/lib/ai-server-public";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/require-auth";
 import {
@@ -20,7 +21,7 @@ export async function GET(_request: Request, context: RouteContext) {
     return NextResponse.json({ error: "Servidor no encontrado" }, { status: 404 });
   }
 
-  return NextResponse.json(server);
+  return NextResponse.json(sanitizeAiServer(server));
 }
 
 export async function PATCH(request: Request, context: RouteContext) {
@@ -35,6 +36,7 @@ export async function PATCH(request: Request, context: RouteContext) {
   }
 
   const body = await request.json();
+  const apiKey = resolveApiKeyFromBody(body, existing.apiKey);
 
   if (body.isDefault) {
     await unsetDefaultServers(session.user.id, id);
@@ -50,10 +52,11 @@ export async function PATCH(request: Request, context: RouteContext) {
       color: body.color,
       enabled: body.enabled,
       isDefault: body.isDefault ?? true,
+      ...(apiKey !== undefined ? { apiKey } : {}),
     },
   });
 
-  return NextResponse.json(server);
+  return NextResponse.json(sanitizeAiServer(server));
 }
 
 export async function DELETE(_request: Request, context: RouteContext) {

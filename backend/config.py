@@ -18,9 +18,24 @@ class Settings(BaseSettings):
     salescloser_schema: str = "public"
     database_url: str | None = None
 
+    # CRM (opcional — si no se define, se lee api-crm-admin-process/.env)
+    crm_host: str | None = None
+    crm_port: int | None = None
+    crm_user: str | None = None
+    crm_password: str | None = None
+    crm_db: str | None = None
+
     vllm_url: str = "http://127.0.0.1:8002/v1"
     vllm_model: str = "Phi-3.5-mini-instruct"
+    vllm_api_key: str | None = None
     hf_token: str | None = None
+
+    @property
+    def bearer_api_key(self) -> str | None:
+        for candidate in (self.vllm_api_key, self.hf_token):
+            if candidate and str(candidate).strip():
+                return str(candidate).strip()
+        return None
     agent_api_url: str = "http://127.0.0.1:8100"
     storage_dir: str = "storage"
     public_base_url: str = "http://localhost:8100"

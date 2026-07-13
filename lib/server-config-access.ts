@@ -1,5 +1,5 @@
 import type { AiServerConfig, UserRole } from "@/generated/prisma/client";
-import { getHfToken } from "@/lib/env";
+import { resolveEffectiveApiKey } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 
 export type SessionUser = {
@@ -36,14 +36,7 @@ export type LlmEndpoint = {
   apiKey?: string | null;
 };
 
-function withHfToken(endpoint: LlmEndpoint): LlmEndpoint {
-  return {
-    ...endpoint,
-    apiKey: endpoint.apiKey ?? getHfToken() ?? null,
-  };
-}
-
-/** Proveedor único (Phi) — chat y tools usan el mismo endpoint. */
+/** Proveedor del usuario — token HF/API se configura en Ajustes → Proveedor de IA. */
 export async function resolveUserLlmEndpoint(userId: string): Promise<LlmEndpoint | null> {
   const servers = await prisma.aiServerConfig.findMany({
     where: { userId, enabled: true },
@@ -54,11 +47,11 @@ export async function resolveUserLlmEndpoint(userId: string): Promise<LlmEndpoin
   const server = servers[0];
   if (!server) return null;
 
-  return withHfToken({
+  return {
     baseUrl: server.baseUrl,
     modelName: server.modelName,
-    apiKey: server.apiKey,
-  });
+    apiKey: resolveEffectiveApiKey(server.apiKey) ?? null,
+  };
 }
 
 export async function unsetDefaultServers(userId: string, exceptId?: string) {

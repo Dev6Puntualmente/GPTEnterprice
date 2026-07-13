@@ -1,5 +1,6 @@
 import { AiProviderRole, AiServerType } from "@/generated/prisma/client";
 import { NextResponse } from "next/server";
+import { resolveApiKeyFromBody, sanitizeAiServer } from "@/lib/ai-server-public";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/require-auth";
 import { listUserAiServers, unsetDefaultServers } from "@/lib/server-config-access";
@@ -9,7 +10,7 @@ export async function GET() {
   if (error) return error;
 
   const servers = await listUserAiServers(session.user.id);
-  return NextResponse.json(servers);
+  return NextResponse.json(servers.map(sanitizeAiServer));
 }
 
 export async function POST(request: Request) {
@@ -37,6 +38,7 @@ export async function POST(request: Request) {
     enabled = true,
     isDefault = true,
   } = body;
+  const apiKey = resolveApiKeyFromBody(body);
 
   if (!name || !baseUrl || !modelName) {
     return NextResponse.json(
@@ -55,6 +57,7 @@ export async function POST(request: Request) {
       name,
       baseUrl: baseUrl.replace(/\/$/, ""),
       modelName,
+      apiKey: apiKey ?? null,
       type: type as AiServerType,
       role: AiProviderRole.GENERAL,
       color,
@@ -63,5 +66,5 @@ export async function POST(request: Request) {
     },
   });
 
-  return NextResponse.json(server, { status: 201 });
+  return NextResponse.json(sanitizeAiServer(server), { status: 201 });
 }
