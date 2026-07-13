@@ -31,6 +31,68 @@ async function upsertProjectTools(projectId: string, tools: SeedTool[]) {
   }
 }
 
+const POSTER_TOOL_PARAMETERS: Prisma.InputJsonValue = {
+  type: "object",
+  properties: {
+    titulo_principal: { type: "string", description: "Título del poster (alias: titulo)" },
+    titulo: { type: "string" },
+    color_esquema: {
+      type: "string",
+      enum: [
+        "corporativo_azul",
+        "ecologico_verde",
+        "alerta_rojo",
+        "minimalista_oscuro",
+        "aviso_naranja",
+      ],
+      description: "Preset de colores (opcional si defines colores manualmente)",
+    },
+    color_fondo: { type: "string", description: "Hex fondo superior ej. #06140c" },
+    color_fondo_secundario: { type: "string", description: "Hex fondo inferior (degradado)" },
+    color_texto: { type: "string", description: "Hex color título y encabezados" },
+    color_texto_secundario: { type: "string", description: "Hex color cuerpo y pie" },
+    color_acento: { type: "string", description: "Hex barras, iconos y acentos" },
+    color_badge: { type: "string", description: "Hex texto del badge superior" },
+    ancho: { type: "number", description: "Ancho en px (400-1400, default 600)" },
+    alto: { type: "number", description: "Alto en px (auto si se omite)" },
+    margen: { type: "number", description: "Margen lateral en px" },
+    tamano_fuente_titulo: { type: "number", description: "Tamaño fuente título" },
+    tamano_fuente_cuerpo: { type: "number", description: "Tamaño fuente cuerpo" },
+    tamano_fuente_subtitulo: { type: "number", description: "Tamaño fuente subtítulos de sección" },
+    tamano_fuente_pie: { type: "number", description: "Tamaño fuente pie de página" },
+    badge_texto: { type: "string", description: "Texto del badge superior ej. INFORMATIVO" },
+    tema: { type: "string", description: "Legacy: alerta | info | exito | aviso | neutro" },
+    mensaje: { type: "string", description: "Texto único si no usas secciones" },
+    subtitulo: { type: "string" },
+    pie_pagina: { type: "string" },
+    secciones_informativas: {
+      type: "array",
+      description: "Hasta 3 bloques del cuerpo",
+      items: {
+        type: "object",
+        properties: {
+          subtitulo: { type: "string" },
+          contenido_texto: { type: "string" },
+          icono_svg_sugerido: {
+            type: "string",
+            enum: ["reciclaje", "grafico_barras", "usuario", "alerta", "agua", "info", "exito"],
+          },
+        },
+        required: ["subtitulo", "contenido_texto"],
+      },
+    },
+  },
+  required: [],
+};
+
+const POSTER_TOOL: SeedTool = {
+  name: "generar_poster_alerta",
+  description:
+    "Genera poster PNG parametrizable. Elige titulo_principal, secciones_informativas y colores/tamaños (hex y px). Usar cuando pidan poster, cartel o imagen informativa.",
+  handlerKey: "generar_poster_alerta",
+  parameters: POSTER_TOOL_PARAMETERS,
+};
+
 const CRM_TOOLS: SeedTool[] = [
   {
     name: "crm_buscar_clientes",
@@ -213,22 +275,7 @@ const CRM_TOOLS: SeedTool[] = [
       },
     },
   },
-  {
-    name: "generar_poster_alerta",
-    description: "Genera un poster visual en SVG (alerta, info, éxito). Devuelve imagen para ver o descargar.",
-    handlerKey: "generar_poster_alerta",
-    parameters: {
-      type: "object",
-      properties: {
-        titulo: { type: "string" },
-        mensaje: { type: "string" },
-        subtitulo: { type: "string" },
-        tema: { type: "string" },
-        pie_pagina: { type: "string" },
-      },
-      required: ["titulo", "mensaje"],
-    },
-  },
+  POSTER_TOOL,
   {
     name: "crm_resumen_estadisticas",
     description: "Estadísticas globales del CRM.",
@@ -462,20 +509,7 @@ const SALESCLOSER_TOOLS: SeedTool[] = [
       },
     },
   },
-  {
-    name: "generar_poster_alerta",
-    description: "Genera poster visual en SVG para avisos internos.",
-    handlerKey: "generar_poster_alerta",
-    parameters: {
-      type: "object",
-      properties: {
-        titulo: { type: "string" },
-        mensaje: { type: "string" },
-        tema: { type: "string" },
-      },
-      required: ["titulo", "mensaje"],
-    },
-  },
+  POSTER_TOOL,
 ];
 
 async function main() {
@@ -837,22 +871,7 @@ IMPORTANTE:
 
   await upsertProjectTools("demo-crm", CRM_TOOLS);
   await upsertProjectTools("demo-salescloser", SALESCLOSER_TOOLS);
-  await upsertProjectTools("demo-rrhh", [
-    {
-      name: "generar_poster_alerta",
-      description: "Genera poster visual en SVG para comunicados internos.",
-      handlerKey: "generar_poster_alerta",
-      parameters: {
-        type: "object",
-        properties: {
-          titulo: { type: "string" },
-          mensaje: { type: "string" },
-          tema: { type: "string" },
-        },
-        required: ["titulo", "mensaje"],
-      },
-    },
-  ]);
+  await upsertProjectTools("demo-rrhh", [POSTER_TOOL]);
 }
 
 main()

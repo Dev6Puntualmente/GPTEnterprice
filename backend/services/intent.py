@@ -168,6 +168,12 @@ _DATA_TOOL_PATTERNS = (
     r"\bdime\b",
     r"\bobt[eé]n\b",
     r"\bobtener\b",
+    r"\bposter\b",
+    r"\bcartel\b",
+    r"\bimagen\b",
+    r"\baviso\s+visual\b",
+    r"\bcomunicado\b",
+    r"\b(?:crea|genera|haz).{0,20}(?:poster|cartel|imagen)\b",
 )
 
 

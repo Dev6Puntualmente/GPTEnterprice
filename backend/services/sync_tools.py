@@ -820,13 +820,13 @@ def _format_tool_result(
                 )
         return prefix + "\n".join(lines)
 
-    if tool == "generar_poster_alerta":
+    if tool in ("generar_poster_alerta", "generar_estructura_poster"):
         if not data.get("success"):
             return prefix + (data.get("mensaje") or "No pude generar el poster.")
         return prefix + (
-            f"**Poster generado** ({data.get('tema', 'alerta')})\n\n"
+            f"**Poster PNG generado** ({data.get('ancho')}×{data.get('alto')} px · {data.get('tema', 'alerta')})\n\n"
             f"![Poster]({data.get('url')})\n\n"
-            f"[Descargar SVG]({data.get('url')})"
+            f"[Descargar PNG]({data.get('url')})"
         )
 
     if tool == "ejecutar_consulta_crm":

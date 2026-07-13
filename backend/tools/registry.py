@@ -187,7 +187,7 @@ from tools.salescloser_reports import (
     obtener_esquema_salescloser,
 )
 from tools.reports import obtener_reporte_estadisticas
-from tools.poster import generar_poster_alerta
+from tools.poster import generar_estructura_poster, generar_poster_alerta
 from tools.crm import (
     ejecutar_consulta_crm,
     crm_buscar_clientes,
@@ -246,6 +246,7 @@ TOOL_HANDLERS = {
     "crm_reporte_estados_agentes": crm_reporte_estados_agentes,
     # ── Experimental ──────────────────────────────────────────────────────────
     "generar_poster_alerta": generar_poster_alerta,
+    "generar_estructura_poster": generar_estructura_poster,
 }
 
 TOOL_CATALOG = {
@@ -279,7 +280,8 @@ TOOL_CATALOG = {
     "crm_dashboard_whatsapp": "CRM — Dashboard WhatsApp (chats y mensajes por periodo)",
     "crm_dashboard_tipologico": "CRM — Distribución tipológica de gestiones",
     "crm_reporte_estados_agentes": "CRM — Auditoría de estados de agentes",
-    "generar_poster_alerta": "[EXPERIMENTAL] Genera un poster/imagen de alerta o aviso visual en SVG",
+    "generar_poster_alerta": "[EXPERIMENTAL] Poster PNG parametrizable (colores, tamaños, secciones)",
+    "generar_estructura_poster": "[EXPERIMENTAL] Igual que generar_poster_alerta (esquema estructurado)",
 }
 
 
