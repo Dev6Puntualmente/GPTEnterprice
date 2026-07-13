@@ -42,6 +42,16 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
     max_tool_iterations: int = 5
     vllm_tools_enabled: bool = False
+    # Si false, no intenta tool-calling nativo en vLLM (útil con parser hermes pendiente).
+    vllm_native_tools: bool = True
+    # Si false (default cuando vllm_tools_enabled=true), el LLM elige tools; no regex sync.
+    sync_tools_enabled: bool | None = None
+
+    @property
+    def use_sync_tools(self) -> bool:
+        if self.sync_tools_enabled is not None:
+            return self.sync_tools_enabled
+        return not self.vllm_tools_enabled
 
     @property
     def postgres_dsn(self) -> str:

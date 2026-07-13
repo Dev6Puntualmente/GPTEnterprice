@@ -42,6 +42,24 @@ if (-not $NoKill) {
     }
 }
 
+function Get-TextFileMd5 {
+    param([string]$Path)
+    $md5 = [System.Security.Cryptography.MD5]::Create()
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        try {
+            $bytes = $md5.ComputeHash($stream)
+            return ([BitConverter]::ToString($bytes) -replace '-', '').ToLower()
+        }
+        finally {
+            $stream.Close()
+        }
+    }
+    finally {
+        $md5.Dispose()
+    }
+}
+
 Push-Location $Backend
 try {
     $venvPython = $null
@@ -59,7 +77,15 @@ try {
         $venvPython = Join-Path $Backend ".venv\Scripts\python.exe"
     }
 
-    & $venvPython -m pip install -q -r requirements.txt
+    $reqPath = Join-Path $Backend "requirements.txt"
+    $reqHash = Get-TextFileMd5 -Path $reqPath
+    $hashFile = Join-Path $Backend ".requirements.md5"
+    $prevHash = if (Test-Path $hashFile) { (Get-Content $hashFile -Raw).Trim() } else { "" }
+    if ($reqHash -ne $prevHash) {
+        Write-Host "Actualizando dependencias Python..." -ForegroundColor Cyan
+        & $venvPython -m pip install -q -r requirements.txt
+        Set-Content -Path $hashFile -Value $reqHash -NoNewline
+    }
     $backendEnv = Join-Path $Backend ".env"
     if (-not (Test-Path $backendEnv)) {
         Copy-Item $RootEnv $backendEnv -Force

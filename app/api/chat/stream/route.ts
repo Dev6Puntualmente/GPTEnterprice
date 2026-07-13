@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/require-auth";
 import { buildDateContext } from "@/lib/chat-intent";
+import { agentFetchErrorHint, fetchAgent } from "@/lib/agent-fetch";
+import { trimChatHistory } from "@/lib/trim-chat-history";
 import { getAgentApiUrl } from "@/lib/env";
 import { resolveUserLlmEndpoint } from "@/lib/server-config-access";
 import type { ChatResponse, ToolDefinition } from "@/lib/types";
@@ -51,14 +53,31 @@ function toAgentMessages(
 
 type StreamEvent =
   | { type: "token"; content: string }
+  | { type: "status"; content?: string }
+  | { type: "error"; message?: string }
   | {
       type: "done";
       model_used?: string;
-      message?: string;
+      message?: string | { content?: string };
       tool_calls?: ChatResponse["tool_calls"];
       pending_job?: ChatResponse["pending_job"];
       files?: string[];
     };
+
+function extractFinalText(
+  doneEvent: Extract<StreamEvent, { type: "done" }> | null,
+  fullText: string,
+): string {
+  const streamed = fullText.trim();
+  const raw = doneEvent?.message;
+  if (typeof raw === "string" && raw.trim()) {
+    return raw.trim();
+  }
+  if (raw && typeof raw === "object" && typeof raw.content === "string" && raw.content.trim()) {
+    return raw.content.trim();
+  }
+  return streamed;
+}
 
 function parseSseChunk(buffer: string): { events: StreamEvent[]; rest: string } {
   const events: StreamEvent[] = [];
@@ -140,10 +159,10 @@ export async function POST(request: Request) {
     },
   });
 
-  const history = [
+  const history = trimChatHistory([
     ...conversation.messages,
     { role: MessageRole.USER, content: message.trim(), toolName: null, toolCallId: null },
-  ];
+  ]);
   const contextBlock = conversation.project.contextJson
     ? `\n\nContexto del proyecto:\n${JSON.stringify(conversation.project.contextJson, null, 2)}`
     : "";
@@ -154,33 +173,36 @@ export async function POST(request: Request) {
 
   let agentResponse: Response;
   try {
-    agentResponse = await fetch(chatUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(streamRequested ? 120_000 : 180_000),
-      body: JSON.stringify({
-        system_prompt: `${conversation.project.systemPrompt}\n\n${dateContext}${contextBlock}`,
-        messages: toAgentMessages(history),
-        tools: toOpenAiTools(conversation.project.tools),
-        stream: streamRequested,
-        vllm: llmEndpoint
-          ? {
-              base_url: llmEndpoint.baseUrl,
-              model: llmEndpoint.modelName,
-              ...(llmEndpoint.apiKey ? { api_key: llmEndpoint.apiKey } : {}),
-            }
-          : null,
-      }),
-    });
+    agentResponse = await fetchAgent(
+      chatUrl,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          system_prompt: `${conversation.project.systemPrompt}\n\n${dateContext}${contextBlock}`,
+          messages: toAgentMessages(history),
+          tools: toOpenAiTools(conversation.project.tools),
+          stream: streamRequested,
+          vllm: llmEndpoint
+            ? {
+                base_url: llmEndpoint.baseUrl,
+                model: llmEndpoint.modelName,
+                ...(llmEndpoint.apiKey ? { api_key: llmEndpoint.apiKey } : {}),
+              }
+            : null,
+        }),
+      },
+      { timeoutMs: streamRequested ? 120_000 : 180_000, retries: 2 },
+    );
   } catch (agentError) {
     const detail =
       agentError instanceof Error ? agentError.message : "FastAPI no está disponible";
     const hint =
       detail.includes("fetch failed") || detail.includes("ECONNREFUSED")
-        ? " ¿Está corriendo FastAPI en el puerto 8101? (npm run backend:start)"
+        ? " Verifica que FastAPI esté en el puerto 8101 (npm run backend:start)."
         : detail.includes("timeout") || detail.includes("aborted")
-          ? " FastAPI no respondió a tiempo — puede estar bloqueado por una consulta CRM. Reinicia el backend."
-          : "";
+          ? " FastAPI no respondió a tiempo — puede estar bloqueado por CRM o vLLM."
+          : agentFetchErrorHint(agentError);
     return NextResponse.json(
       {
         error: "No se pudo contactar FastAPI",
@@ -275,6 +297,7 @@ export async function POST(request: Request) {
       let buffer = "";
       let fullText = "";
       let doneEvent: Extract<StreamEvent, { type: "done" }> | null = null;
+      let streamError: string | null = null;
 
       try {
         while (true) {
@@ -285,10 +308,19 @@ export async function POST(request: Request) {
           buffer = parsed.rest;
 
           for (const event of parsed.events) {
-            if (event.type === "token") {
+            if (event.type === "token" && event.content) {
               fullText += event.content;
               controller.enqueue(
                 encoder.encode(`data: ${JSON.stringify({ type: "token", content: event.content })}\n\n`),
+              );
+            } else if (event.type === "status" && event.content) {
+              controller.enqueue(
+                encoder.encode(`data: ${JSON.stringify({ type: "status", content: event.content })}\n\n`),
+              );
+            } else if (event.type === "error" && event.message) {
+              streamError = event.message;
+              controller.enqueue(
+                encoder.encode(`data: ${JSON.stringify({ type: "error", message: event.message })}\n\n`),
               );
             } else if (event.type === "done") {
               doneEvent = event;
@@ -296,8 +328,16 @@ export async function POST(request: Request) {
           }
         }
 
-        const finalMessage = doneEvent?.message ?? fullText;
-        const modelUsed = doneEvent?.model_used ?? "stream";
+        if (streamError) {
+          controller.close();
+          return;
+        }
+
+        const finalMessage =
+          extractFinalText(doneEvent, fullText) ||
+          "No recibí respuesta del modelo. Verifica que vLLM esté activo y responda correctamente.";
+        const modelUsed =
+          (typeof doneEvent?.model_used === "string" && doneEvent.model_used) || undefined;
         const toolCalls = doneEvent?.tool_calls;
         const files = doneEvent?.files ?? [];
 
@@ -321,7 +361,7 @@ export async function POST(request: Request) {
             role: MessageRole.ASSISTANT,
             content: finalMessage,
             metadata: {
-              model_used: modelUsed,
+              ...(modelUsed ? { model_used: modelUsed } : {}),
               files,
             } as Prisma.InputJsonValue,
           },
@@ -338,7 +378,7 @@ export async function POST(request: Request) {
               type: "done",
               conversationId: convId,
               message: assistantMessage,
-              stream: true,
+              model_used: modelUsed,
             })}\n\n`,
           ),
         );

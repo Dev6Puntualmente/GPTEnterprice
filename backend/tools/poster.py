@@ -1,7 +1,5 @@
 """
-🎨 Módulo experimental de generación de posters/alertas visuales.
-Genera imágenes SVG que se sirven como archivos estáticos desde /files/.
-El SVG resultante puede renderizarse directamente en el chat inline.
+Generación de posters/alertas visuales en SVG.
 """
 from __future__ import annotations
 
@@ -15,25 +13,68 @@ from config import settings
 
 STORAGE_DIR = Path(settings.storage_dir)
 
-# Paleta de temas de color predefinidos
 THEMES = {
-    "alerta": {"bg": "#1a0a0a", "accent": "#ef4444", "text": "#fff", "subtext": "#fca5a5", "icon": "⚠️"},
-    "info":   {"bg": "#0a1628", "accent": "#3b82f6", "text": "#fff", "subtext": "#93c5fd", "icon": "ℹ️"},
-    "exito":  {"bg": "#0a1a0f", "accent": "#22c55e", "text": "#fff", "subtext": "#86efac", "icon": "✅"},
-    "aviso":  {"bg": "#1a1200", "accent": "#f59e0b", "text": "#fff", "subtext": "#fde68a", "icon": "🔔"},
-    "neutro": {"bg": "#0f0f1a", "accent": "#8b5cf6", "text": "#fff", "subtext": "#c4b5fd", "icon": "📋"},
+    "alerta": {
+        "bg": "#120808",
+        "bg2": "#2a0f0f",
+        "accent": "#ef4444",
+        "accentSoft": "#fca5a5",
+        "text": "#fff7f7",
+        "subtext": "#fecaca",
+        "badge": "ALERTA",
+        "icon": "⚠",
+    },
+    "info": {
+        "bg": "#071322",
+        "bg2": "#0c2340",
+        "accent": "#3b82f6",
+        "accentSoft": "#93c5fd",
+        "text": "#f8fbff",
+        "subtext": "#bfdbfe",
+        "badge": "INFORMATIVO",
+        "icon": "ℹ",
+    },
+    "exito": {
+        "bg": "#06140c",
+        "bg2": "#0d2918",
+        "accent": "#22c55e",
+        "accentSoft": "#86efac",
+        "text": "#f4fff8",
+        "subtext": "#bbf7d0",
+        "badge": "ÉXITO",
+        "icon": "✓",
+    },
+    "aviso": {
+        "bg": "#171005",
+        "bg2": "#2d1a05",
+        "accent": "#f59e0b",
+        "accentSoft": "#fde68a",
+        "text": "#fffbeb",
+        "subtext": "#fde68a",
+        "badge": "AVISO",
+        "icon": "◆",
+    },
+    "neutro": {
+        "bg": "#0d0d18",
+        "bg2": "#17172a",
+        "accent": "#8b5cf6",
+        "accentSoft": "#c4b5fd",
+        "text": "#faf8ff",
+        "subtext": "#ddd6fe",
+        "badge": "COMUNICADO",
+        "icon": "◈",
+    },
 }
 
 
 def _escape(text: str) -> str:
-    """Escapa texto para uso seguro en SVG/XML."""
     return html.escape(str(text))
 
 
 def _wrap_text_lines(text: str, max_chars: int = 28) -> list[str]:
-    """Parte el texto en líneas respetando palabras."""
     words = text.split()
-    lines, current = [], ""
+    lines: list[str] = []
+    current = ""
     for word in words:
         if len(current) + len(word) + 1 <= max_chars:
             current = f"{current} {word}".strip()
@@ -43,7 +84,17 @@ def _wrap_text_lines(text: str, max_chars: int = 28) -> list[str]:
             current = word
     if current:
         lines.append(current)
-    return lines[:5]  # máximo 5 líneas
+    return lines[:6]
+
+
+def _decor_circles(accent: str) -> str:
+    circles = []
+    specs = [(80, 90, 120), (420, 140, 90), (500, 520, 160), (60, 560, 80)]
+    for cx, cy, r in specs:
+        circles.append(
+            f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{accent}" opacity="0.06"/>'
+        )
+    return "\n".join(circles)
 
 
 def generar_poster_alerta(
@@ -53,122 +104,121 @@ def generar_poster_alerta(
     tema: str = "alerta",
     pie_pagina: str | None = None,
 ) -> dict[str, Any]:
-    """
-    [EXPERIMENTAL] Genera un poster/imagen de alerta visual en formato SVG.
-    Útil para comunicados internos, avisos urgentes o notificaciones visuales.
-
-    El archivo se guarda como SVG y puede verse directamente en el chat.
-    """
+    """Genera un poster visual en SVG listo para ver en el chat o descargar."""
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Normalizar tema
     theme_key = tema.lower().strip()
     if theme_key not in THEMES:
         theme_key = "alerta"
     t = THEMES[theme_key]
 
-    titulo_lines = _wrap_text_lines(titulo.upper(), 20)
-    mensaje_lines = _wrap_text_lines(mensaje, 32)
+    titulo_lines = _wrap_text_lines(titulo.upper(), 22)
+    mensaje_lines = _wrap_text_lines(mensaje, 34)
     subtitulo_text = _escape(subtitulo) if subtitulo else None
-    pie_text = _escape(pie_pagina) if pie_pagina else None
+    pie_text = _escape(pie_pagina) if pie_pagina else "GPTEnterprice · Comunicado interno"
 
-    W, H = 480, 640
-    title_y_start = 200
-    title_line_h = 52
-    msg_y_start = title_y_start + len(titulo_lines) * title_line_h + 30
-    msg_line_h = 28
+    W, H = 600, 820
+    card_x, card_y, card_w, card_h = 36, 120, W - 72, H - 200
+    title_y = card_y + 56
+    title_line_h = 46
+    msg_y = title_y + len(titulo_lines) * title_line_h + 28
+    msg_line_h = 30
 
-    # Generar bloques de texto SVG
     titulo_svg = "\n".join(
-        f'<text x="50%" y="{title_y_start + i * title_line_h}" '
-        f'dominant-baseline="middle" text-anchor="middle" '
-        f'font-family="Arial Black, Impact, sans-serif" font-size="42" '
-        f'font-weight="900" fill="{t["text"]}">{_escape(line)}</text>'
+        f'<text x="{W // 2}" y="{title_y + i * title_line_h}" '
+        f'text-anchor="middle" dominant-baseline="middle" '
+        f'font-family="Segoe UI, Arial Black, sans-serif" font-size="38" '
+        f'font-weight="800" letter-spacing="1.5" fill="{t["text"]}">{_escape(line)}</text>'
         for i, line in enumerate(titulo_lines)
     )
 
     mensaje_svg = "\n".join(
-        f'<text x="50%" y="{msg_y_start + i * msg_line_h}" '
-        f'dominant-baseline="middle" text-anchor="middle" '
-        f'font-family="Arial, sans-serif" font-size="20" '
+        f'<text x="{W // 2}" y="{msg_y + i * msg_line_h}" '
+        f'text-anchor="middle" dominant-baseline="middle" '
+        f'font-family="Segoe UI, Arial, sans-serif" font-size="21" '
         f'fill="{t["subtext"]}">{_escape(line)}</text>'
         for i, line in enumerate(mensaje_lines)
     )
 
     subtitulo_svg = ""
     if subtitulo_text:
-        sub_y = msg_y_start + len(mensaje_lines) * msg_line_h + 24
+        sub_y = msg_y + len(mensaje_lines) * msg_line_h + 28
         subtitulo_svg = (
-            f'<text x="50%" y="{sub_y}" dominant-baseline="middle" text-anchor="middle" '
-            f'font-family="Arial, sans-serif" font-size="16" font-style="italic" '
-            f'fill="{t["accent"]}">{subtitulo_text}</text>'
+            f'<text x="{W // 2}" y="{sub_y}" text-anchor="middle" '
+            f'font-family="Segoe UI, Arial, sans-serif" font-size="17" font-style="italic" '
+            f'fill="{t["accentSoft"]}">{subitulo_text}</text>'
         )
 
-    pie_svg = ""
-    if pie_text:
-        pie_svg = (
-            f'<text x="50%" y="{H - 32}" dominant-baseline="middle" text-anchor="middle" '
-            f'font-family="Arial, sans-serif" font-size="14" fill="{t["subtext"]}88">'
-            f'{pie_text}</text>'
-        )
-
-    # Línea divisoria accent
-    divider_y = title_y_start - 20
-    fecha_str = datetime.now().strftime("%d/%m/%Y %H:%M")
+    fecha_str = datetime.now().strftime("%d/%m/%Y · %H:%M")
+    icon_size = 54
+    icon_y = 62
 
     svg = f"""<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">
   <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:{t['bg']};stop-opacity:1" />
-      <stop offset="100%" style="stop-color:{t['accent']}22;stop-opacity:1" />
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="{t['bg']}"/>
+      <stop offset="100%" stop-color="{t['bg2']}"/>
     </linearGradient>
-    <linearGradient id="stripe" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:{t['accent']};stop-opacity:0" />
-      <stop offset="50%" style="stop-color:{t['accent']};stop-opacity:1" />
-      <stop offset="100%" style="stop-color:{t['accent']};stop-opacity:0" />
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="{t['accent']}" stop-opacity="0.2"/>
+      <stop offset="50%" stop-color="{t['accent']}" stop-opacity="1"/>
+      <stop offset="100%" stop-color="{t['accent']}" stop-opacity="0.2"/>
     </linearGradient>
+    <filter id="cardShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
   </defs>
 
-  <!-- Fondo -->
-  <rect width="{W}" height="{H}" fill="url(#bg)" rx="16"/>
+  <rect width="{W}" height="{H}" rx="24" fill="url(#bgGrad)"/>
+  {_decor_circles(t['accent'])}
 
-  <!-- Borde accent -->
-  <rect x="2" y="2" width="{W-4}" height="{H-4}" fill="none"
-        stroke="{t['accent']}" stroke-width="2" stroke-opacity="0.4" rx="14"/>
+  <!-- Header strip -->
+  <rect x="0" y="0" width="{W}" height="96" fill="{t['accent']}" opacity="0.12"/>
+  <rect x="0" y="0" width="{W}" height="5" fill="{t['accent']}"/>
 
-  <!-- Líneas decorativas superiores -->
-  <rect x="0" y="0" width="{W}" height="6" fill="{t['accent']}" rx="14"/>
-  <rect x="0" y="8" width="{W}" height="2" fill="{t['accent']}" opacity="0.3" rx="2"/>
+  <!-- Badge -->
+  <rect x="{W // 2 - 72}" y="18" width="144" height="30" rx="15" fill="{t['accent']}" opacity="0.22"/>
+  <text x="{W // 2}" y="37" text-anchor="middle" dominant-baseline="middle"
+        font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700"
+        letter-spacing="2.5" fill="{t['accentSoft']}">{t['badge']}</text>
 
-  <!-- Icono / emoji grande -->
-  <text x="50%" y="120" dominant-baseline="middle" text-anchor="middle"
-        font-size="72">{t['icon']}</text>
+  <!-- Icon circle -->
+  <circle cx="{W // 2}" cy="{icon_y}" r="38" fill="{t['accent']}" opacity="0.18"/>
+  <circle cx="{W // 2}" cy="{icon_y}" r="30" fill="{t['accent']}" filter="url(#glow)"/>
+  <text x="{W // 2}" y="{icon_y + 2}" text-anchor="middle" dominant-baseline="middle"
+        font-size="{icon_size}" fill="#ffffff" font-weight="700">{t['icon']}</text>
 
-  <!-- Línea separadora -->
-  <rect x="40" y="{divider_y - 10}" width="{W - 80}" height="2" fill="url(#stripe)" opacity="0.6"/>
+  <!-- Main card -->
+  <rect x="{card_x}" y="{card_y}" width="{card_w}" height="{card_h}" rx="20"
+        fill="rgba(255,255,255,0.04)" stroke="{t['accent']}" stroke-opacity="0.35"
+        stroke-width="1.5" filter="url(#cardShadow)"/>
 
-  <!-- Título -->
+  <rect x="{card_x + 24}" y="{card_y + 18}" width="{card_w - 48}" height="3" rx="1.5" fill="url(#accentGrad)" opacity="0.8"/>
+
   {titulo_svg}
 
-  <!-- Línea separadora inferior título -->
-  <rect x="80" y="{msg_y_start - 16}" width="{W - 160}" height="1.5" fill="{t['accent']}" opacity="0.3"/>
+  <line x1="{card_x + 40}" y1="{msg_y - 18}" x2="{card_x + card_w - 40}" y2="{msg_y - 18}"
+        stroke="{t['accent']}" stroke-opacity="0.35" stroke-width="1.5"/>
 
-  <!-- Mensaje -->
   {mensaje_svg}
-
-  <!-- Subtítulo -->
   {subtitulo_svg}
 
-  <!-- Pie de página -->
-  {pie_svg}
+  <!-- Footer -->
+  <text x="{W // 2}" y="{H - 42}" text-anchor="middle"
+        font-family="Segoe UI, Arial, sans-serif" font-size="13" fill="{t['subtext']}" opacity="0.9">
+    {pie_text}
+  </text>
+  <text x="{W - 28}" y="{H - 18}" text-anchor="end"
+        font-family="Consolas, monospace" font-size="11" fill="{t['subtext']}" opacity="0.55">
+    {fecha_str}
+  </text>
 
-  <!-- Timestamp pequeño -->
-  <text x="{W - 12}" y="{H - 14}" text-anchor="end"
-        font-family="monospace" font-size="10" fill="{t['subtext']}55">{fecha_str}</text>
-
-  <!-- Línea inferior accent -->
-  <rect x="0" y="{H-6}" width="{W}" height="6" fill="{t['accent']}" rx="14"/>
+  <rect x="0" y="{H - 5}" width="{W}" height="5" fill="{t['accent']}"/>
 </svg>"""
 
     filename = f"poster_{uuid.uuid4().hex[:8]}.svg"

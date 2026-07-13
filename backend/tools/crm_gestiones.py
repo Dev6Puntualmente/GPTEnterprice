@@ -4,7 +4,7 @@ import uuid
 from datetime import date, timedelta
 from typing import Any
 
-from tools.crm_db import fetch_crm_all, fetch_crm_one
+from tools.crm_db import fetch_crm_all, fetch_crm_one, USERS_ONLINE_CONDITION
 
 _GESTION_SELECT = """
     SELECT
@@ -109,7 +109,7 @@ def crm_listar_gestiones(
     params: list[Any] = []
 
     if documento:
-        conditions.append("c.document_number = %s")
+        conditions.append("TRIM(c.document_number) = TRIM(%s)")
         params.append(documento.strip())
 
     if cliente:
@@ -130,8 +130,9 @@ def crm_listar_gestiones(
         params.append(fecha_fin.strip())
 
     if not fecha_inicio and not fecha_fin and not documento and not cliente and not asesor:
+        # Sin filtros explícitos: ventana amplia para no devolver cero en listados generales.
         end = date.today()
-        start = end - timedelta(days=30)
+        start = end - timedelta(days=90)
         conditions.append("m.created_at >= %s::date")
         params.append(start.isoformat())
         conditions.append("m.created_at < (%s::date + INTERVAL '1 day')")
@@ -453,7 +454,7 @@ def crm_dashboard_resumen(
             (fecha_inicio, fecha_fin),
         )
         agentes_online = fetch_crm_one(
-            "SELECT COUNT(*) AS total FROM crm.users WHERE is_active = TRUE AND is_online = TRUE"
+            f"SELECT COUNT(*) AS total FROM crm.users WHERE {USERS_ONLINE_CONDITION}"
         )
         chats_activos = fetch_crm_one(
             """

@@ -68,7 +68,7 @@ def crm_buscar_clientes(
         params.extend([pattern, pattern, pattern])
 
     if documento:
-        conditions.append("document_number = %s")
+        conditions.append("TRIM(document_number) = TRIM(%s)")
         params.append(documento.strip())
 
     if ciudad:

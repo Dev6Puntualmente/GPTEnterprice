@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from datetime import date
 from pathlib import Path
@@ -9,6 +10,8 @@ from typing import Any
 from openpyxl import Workbook
 
 from config import settings
+
+logger = logging.getLogger("gptenterprice.tools")
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 DB_PATH = DATA_DIR / "demo.db"
@@ -171,6 +174,7 @@ from tools.salescloser import (
     buscar_llamadas,
     listar_campanas,
     listar_escalaciones,
+    obtener_detalle_llamada,
     obtener_transcripcion_llamada,
     reporte_llamadas_excel,
     resumen_evaluacion_llamada,
@@ -207,6 +211,7 @@ TOOL_HANDLERS = {
     "listar_campanas": listar_campanas,
     "buscar_llamadas": buscar_llamadas,
     "obtener_transcripcion_llamada": obtener_transcripcion_llamada,
+    "obtener_detalle_llamada": obtener_detalle_llamada,
     "resumen_evaluacion_llamada": resumen_evaluacion_llamada,
     "reporte_llamadas_excel": reporte_llamadas_excel,
     "listar_escalaciones": listar_escalaciones,
@@ -237,6 +242,7 @@ TOOL_CATALOG = {
     "listar_campanas": "SalesCloser — Listar campañas activas",
     "buscar_llamadas": "SalesCloser — Buscar llamadas por fecha, campaña o cliente",
     "obtener_transcripcion_llamada": "SalesCloser — Obtener transcripción de una llamada",
+    "obtener_detalle_llamada": "Qontrol — Detalle completo de auditoría (resumen, criterios, acústica, chat, transcripción)",
     "resumen_evaluacion_llamada": "SalesCloser — Score y evaluación IA de una llamada",
     "reporte_llamadas_excel": "SalesCloser — Exportar llamadas a Excel",
     "listar_escalaciones": "SalesCloser — Ver escalaciones por estado",
@@ -266,20 +272,42 @@ def _json_default(value: Any) -> str:
     return str(value)
 
 
+def _summarize_tool_result(name: str, result: Any) -> str:
+    if not isinstance(result, dict):
+        return type(result).__name__
+    if name.startswith("crm_"):
+        for key in ("total", "clientes", "usuarios", "gestiones", "total_registros_encontrados"):
+            if key in result:
+                val = result[key]
+                if isinstance(val, list):
+                    return f"{len(val)} filas"
+                return str(val)
+    if "success" in result:
+        return "ok" if result.get("success") else f"fail: {result.get('error') or result.get('mensaje')}"
+    return "ok"
+
+
 def execute_tool(name: str, arguments: dict[str, Any]) -> str:
     handler = TOOL_HANDLERS.get(name)
     if handler is None:
+        logger.warning("tool desconocida: %s args=%s", name, arguments)
         return json.dumps({"success": False, "error": f"Herramienta desconocida: {name}"}, ensure_ascii=False)
 
+    logger.info("▶ TOOL %s args=%s", name, json.dumps(arguments, ensure_ascii=False, default=str))
     try:
         result = handler(**arguments)
+        summary = _summarize_tool_result(name, result)
+        logger.info("✓ TOOL %s → %s", name, summary)
         return json.dumps(result, ensure_ascii=False, default=_json_default)
     except TypeError as error:
+        logger.warning("✗ TOOL %s TypeError: %s", name, error)
         return json.dumps(
             {"success": False, "error": f"Parámetros inválidos para {name}: {error}"},
             ensure_ascii=False,
         )
     except ValueError as error:
+        logger.warning("✗ TOOL %s ValueError: %s", name, error)
         return json.dumps({"success": False, "error": str(error)}, ensure_ascii=False)
     except Exception as error:
+        logger.exception("✗ TOOL %s error: %s", name, error)
         return json.dumps({"success": False, "error": str(error)}, ensure_ascii=False)

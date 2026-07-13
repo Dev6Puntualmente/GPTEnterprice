@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/require-auth";
 import { buildDateContext } from "@/lib/chat-intent";
+import { agentFetchErrorHint, fetchAgent } from "@/lib/agent-fetch";
+import { trimChatHistory } from "@/lib/trim-chat-history";
 import { getAgentApiUrl } from "@/lib/env";
 import { resolveUserLlmEndpoint } from "@/lib/server-config-access";
 import type { ChatResponse, ToolDefinition } from "@/lib/types";
@@ -117,10 +119,10 @@ export async function POST(request: Request) {
     },
   });
 
-  const history = [
+  const history = trimChatHistory([
     ...conversation.messages,
     { role: MessageRole.USER, content: message.trim(), toolName: null, toolCallId: null },
-  ];
+  ]);
   const contextBlock = conversation.project.contextJson
     ? `\n\nContexto del proyecto:\n${JSON.stringify(conversation.project.contextJson, null, 2)}`
     : "";
@@ -132,28 +134,32 @@ export async function POST(request: Request) {
   let agentResponse: Response;
   try {
     console.info("[chat] contacting FastAPI:", chatUrl);
-    agentResponse = await fetch(chatUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(90_000),
-      body: JSON.stringify({
-        system_prompt: `${conversation.project.systemPrompt}\n\n${dateContext}${contextBlock}`,
-        messages: toAgentMessages(history),
-        tools: toOpenAiTools(conversation.project.tools),
-        vllm: llmEndpoint
-          ? {
-              base_url: llmEndpoint.baseUrl,
-              model: llmEndpoint.modelName,
-              ...(llmEndpoint.apiKey ? { api_key: llmEndpoint.apiKey } : {}),
-            }
-          : null,
-      }),
-    });
+    agentResponse = await fetchAgent(
+      chatUrl,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          system_prompt: `${conversation.project.systemPrompt}\n\n${dateContext}${contextBlock}`,
+          messages: toAgentMessages(history),
+          tools: toOpenAiTools(conversation.project.tools),
+          vllm: llmEndpoint
+            ? {
+                base_url: llmEndpoint.baseUrl,
+                model: llmEndpoint.modelName,
+                ...(llmEndpoint.apiKey ? { api_key: llmEndpoint.apiKey } : {}),
+              }
+            : null,
+        }),
+      },
+      { timeoutMs: 90_000, retries: 2 },
+    );
   } catch (agentError) {
     const detail =
       agentError instanceof Error ? agentError.message : "FastAPI no está disponible";
+    const hint = agentFetchErrorHint(agentError);
     return NextResponse.json(
-      { error: "No se pudo contactar FastAPI", detail, agentApiUrl, chatUrl },
+      { error: "No se pudo contactar FastAPI", detail: `${detail}${hint}`, agentApiUrl, chatUrl },
       { status: 502 },
     );
   }

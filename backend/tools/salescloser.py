@@ -240,6 +240,285 @@ def resumen_evaluacion_llamada(call_id: int | str | float) -> dict[str, Any]:
     }
 
 
+def _parse_call_id(call_id: int | str | float) -> int | None:
+    try:
+        return int(float(call_id))
+    except (ValueError, TypeError):
+        return None
+
+
+def _merge_ai_evaluation(row: dict[str, Any]) -> dict[str, Any] | None:
+    legacy = row.get("ai_evaluation")
+    if isinstance(legacy, str):
+        import json
+
+        try:
+            legacy = json.loads(legacy)
+        except json.JSONDecodeError:
+            legacy = None
+    computed = row.get("evaluation_data")
+    if isinstance(computed, str):
+        import json
+
+        try:
+            computed = json.loads(computed)
+        except json.JSONDecodeError:
+            computed = None
+    if isinstance(computed, dict):
+        ai = dict(computed)
+    elif isinstance(legacy, dict):
+        ai = dict(legacy)
+    else:
+        ai = {}
+    if row.get("compliance_score") is not None and "compliance_score" not in ai:
+        ai["compliance_score"] = row.get("compliance_score")
+    return ai or None
+
+
+def _normalize_transcript(row: dict[str, Any]) -> list[dict[str, Any]]:
+    transcript = row.get("transcript_content") or row.get("transcript")
+    if isinstance(transcript, str):
+        import json
+
+        try:
+            transcript = json.loads(transcript)
+        except json.JSONDecodeError:
+            return [{"speaker": "N/D", "text": transcript}]
+    if isinstance(transcript, list):
+        return [seg for seg in transcript if isinstance(seg, dict)]
+    return []
+
+
+def _normalize_acoustic(row: dict[str, Any]) -> dict[str, Any] | None:
+    acoustic = row.get("acoustic_table") or row.get("acoustic_analysis")
+    if isinstance(acoustic, str):
+        import json
+
+        try:
+            acoustic = json.loads(acoustic)
+        except json.JSONDecodeError:
+            return None
+    return acoustic if isinstance(acoustic, dict) else None
+
+
+def _criterion_status_label(result: dict[str, Any]) -> str:
+    if not result.get("applicable", True):
+        return "No aplica"
+    if result.get("pass") == 1:
+        return "Cumplido"
+    if result.get("pass") == 0:
+        return "No cumplido"
+    return "Pendiente"
+
+
+def obtener_detalle_llamada(
+    call_id: int | str | float,
+    seccion: str | None = None,
+    limite_transcripcion: int | str | float = 40,
+) -> dict[str, Any]:
+    """
+    Detalle completo de una llamada/auditoría Qontrol (equivalente a CallDetail):
+    cabecera, score, resumen IA, criterios, acústica, transcripción o chat WhatsApp.
+    """
+    parsed_id = _parse_call_id(call_id)
+    if parsed_id is None:
+        return {"success": False, "mensaje": f"ID de llamada inválido: {call_id}"}
+
+    try:
+        limite_transcripcion = int(float(limite_transcripcion))
+    except (ValueError, TypeError):
+        limite_transcripcion = 40
+    limite_transcripcion = max(5, min(limite_transcripcion, 200))
+
+    row = fetch_one(
+        """
+        SELECT
+            c.id,
+            c.customer_name,
+            c.customer_document,
+            c.campana,
+            c.channel,
+            c.audio_url,
+            c.is_flagged,
+            c.created_at,
+            c.ai_evaluation,
+            c.acoustic_analysis,
+            c.transcript,
+            c.selected_criteria,
+            c.coaching_items,
+            c.human_calibration,
+            c.source_metadata,
+            u.name AS agent_name,
+            u.email AS agent_email,
+            camp.name AS campana_nombre,
+            ce.compliance_score,
+            ce.data AS evaluation_data,
+            ce.updated_at AS audited_at,
+            ct.content AS transcript_content,
+            ca.analysis AS acoustic_table
+        FROM calls c
+        LEFT JOIN users u ON u.id = c.agent_id
+        LEFT JOIN campaigns camp ON camp.id = c.campaign_id
+        LEFT JOIN call_evaluations ce ON ce.call_id = c.id
+        LEFT JOIN call_transcripts ct ON ct.call_id = c.id
+        LEFT JOIN call_acoustics ca ON ca.call_id = c.id
+        WHERE c.id = %s
+        """,
+        (parsed_id,),
+    )
+    if not row:
+        return {"success": False, "mensaje": f"No encontré la llamada {parsed_id}"}
+
+    ai = _merge_ai_evaluation(row) or {}
+    human = row.get("human_calibration")
+    if isinstance(human, str):
+        import json
+
+        try:
+            human = json.loads(human)
+        except json.JSONDecodeError:
+            human = None
+
+    human_score = None
+    if isinstance(human, dict):
+        human_score = human.get("humanScore")
+        if human_score is None:
+            human_score = human.get("human_score")
+    effective_score = human_score if human_score is not None else ai.get("compliance_score")
+    score_label = "Score H" if human_score is not None else "Score IA"
+
+    source_meta = row.get("source_metadata")
+    if isinstance(source_meta, str):
+        import json
+
+        try:
+            source_meta = json.loads(source_meta)
+        except json.JSONDecodeError:
+            source_meta = {}
+    source_meta = source_meta if isinstance(source_meta, dict) else {}
+
+    channel = (row.get("channel") or "llamada").lower()
+    transcript_segments = _normalize_transcript(row)
+    chat_messages = source_meta.get("chatMessages")
+    if not isinstance(chat_messages, list):
+        chat_messages = []
+
+    criteria_results = ai.get("criteria_results") if isinstance(ai.get("criteria_results"), list) else []
+    selected_criteria = row.get("selected_criteria")
+    if isinstance(selected_criteria, str):
+        import json
+
+        try:
+            selected_criteria = json.loads(selected_criteria)
+        except json.JSONDecodeError:
+            selected_criteria = []
+    if not isinstance(selected_criteria, list):
+        selected_criteria = []
+
+    passed = sum(1 for c in criteria_results if c.get("applicable", True) and c.get("pass") == 1)
+    failed = sum(1 for c in criteria_results if c.get("applicable", True) and c.get("pass") == 0)
+
+    acoustic = _normalize_acoustic(row)
+    callgist = ai.get("callgist_comparison") if isinstance(ai.get("callgist_comparison"), dict) else None
+
+    detalle = {
+        "cabecera": {
+            "id": parsed_id,
+            "cliente": row.get("customer_name"),
+            "documento_cliente": row.get("customer_document") or ai.get("customer_document"),
+            "agente": row.get("agent_name") or ai.get("resolved_agent_name"),
+            "documento_agente": ai.get("agent_document") or source_meta.get("agentDocument"),
+            "campana": row.get("campana_nombre") or row.get("campana"),
+            "canal": channel,
+            "marcada": bool(row.get("is_flagged")),
+            "fecha_llamada": ai.get("audio_call_date"),
+            "fecha_auditoria": row.get("audited_at") or row.get("created_at"),
+            "fecha_registro": row.get("created_at"),
+        },
+        "score": {
+            "valor": effective_score,
+            "etiqueta": score_label,
+            "sentimiento": ai.get("sentiment"),
+            "calibrado": human_score is not None,
+            "human_score": human_score,
+            "ai_score": ai.get("compliance_score"),
+        },
+        "resumen": {
+            "texto": ai.get("summary"),
+            "preview_transcripcion": ai.get("transcript_preview"),
+            "momentos_clave": ai.get("key_moments") or [],
+            "metodo_transcripcion": ai.get("transcript_method"),
+        },
+        "callgist": callgist,
+        "criterios": {
+            "total_seleccionados": len(selected_criteria),
+            "total_evaluados": len(criteria_results),
+            "cumplidos": passed,
+            "no_cumplidos": failed,
+            "resultados": [
+                {
+                    "criterion_id": item.get("criterionId"),
+                    "titulo": item.get("title"),
+                    "estado": _criterion_status_label(item),
+                    "peso": item.get("weight"),
+                    "eval_kind": item.get("evalKind"),
+                    "justificacion": item.get("justification"),
+                    "evidencia": item.get("evidence"),
+                    "inicio_seg": item.get("start"),
+                }
+                for item in criteria_results[:30]
+            ],
+        },
+        "acustica": acoustic,
+        "transcripcion": {
+            "total_segmentos": len(transcript_segments),
+            "segmentos": transcript_segments[:limite_transcripcion],
+            "truncada": len(transcript_segments) > limite_transcripcion,
+        },
+        "chat_whatsapp": {
+            "total_mensajes": len(chat_messages),
+            "mensajes": chat_messages[:50],
+            "metricas": source_meta.get("chatMetrics"),
+            "truncado": len(chat_messages) > 50,
+        },
+        "coaching": row.get("coaching_items") or [],
+    }
+
+    seccion_norm = (seccion or "completo").strip().lower()
+    if seccion_norm not in ("completo", "resumen", "criterios", "transcripcion", "chat", "acustica", "callgist"):
+        seccion_norm = "completo"
+
+    payload: dict[str, Any] = {
+        "success": True,
+        "call_id": parsed_id,
+        "seccion": seccion_norm,
+        "detalle": detalle,
+        "mensaje": f"Detalle de llamada #{parsed_id} obtenido",
+    }
+
+    if seccion_norm == "resumen":
+        payload["detalle"] = {
+            "cabecera": detalle["cabecera"],
+            "score": detalle["score"],
+            "resumen": detalle["resumen"],
+        }
+    elif seccion_norm == "criterios":
+        payload["detalle"] = {"cabecera": detalle["cabecera"], "criterios": detalle["criterios"]}
+    elif seccion_norm == "transcripcion":
+        payload["detalle"] = {
+            "cabecera": detalle["cabecera"],
+            "transcripcion": detalle["transcripcion"],
+        }
+    elif seccion_norm == "chat":
+        payload["detalle"] = {"cabecera": detalle["cabecera"], "chat_whatsapp": detalle["chat_whatsapp"]}
+    elif seccion_norm == "acustica":
+        payload["detalle"] = {"cabecera": detalle["cabecera"], "acustica": detalle["acustica"]}
+    elif seccion_norm == "callgist":
+        payload["detalle"] = {"cabecera": detalle["cabecera"], "callgist": detalle["callgist"]}
+
+    return payload
+
+
 def reporte_llamadas_excel(
     fecha_inicio: str,
     fecha_fin: str,

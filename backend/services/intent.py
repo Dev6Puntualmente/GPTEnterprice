@@ -95,6 +95,22 @@ def extract_date_range(text: str) -> tuple[str, str] | None:
     if "esta semana" in lowered or "de esta semana" in lowered:
         return _week_range()
 
+    if re.search(r"\b(?:este|el)\s+mes\b|\bmes\s+actual\b", lowered):
+        today = date.today()
+        start = date(today.year, today.month, 1)
+        if today.month == 12:
+            end = date(today.year, 12, 31)
+        else:
+            end = date(today.year, today.month + 1, 1) - timedelta(days=1)
+        return start.isoformat(), end.isoformat()
+
+    if re.search(r"\bmes\s+pasado\b|\bmes\s+anterior\b", lowered):
+        today = date.today()
+        first_this_month = date(today.year, today.month, 1)
+        last_prev = first_this_month - timedelta(days=1)
+        start = date(last_prev.year, last_prev.month, 1)
+        return start.isoformat(), last_prev.isoformat()
+
     if "hoy" in re.findall(r"\b(hoy)\b", lowered):
         today = date.today().isoformat()
         return today, today

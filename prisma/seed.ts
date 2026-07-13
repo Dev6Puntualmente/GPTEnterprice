@@ -261,6 +261,132 @@ Cuando el usuario pida reportes, exportaciones o consultas de datos, usa las her
 Nunca inventes datos. Si no tienes una herramienta para algo, dilo claramente.
 Cuando una herramienta genere un archivo, incluye el enlace en tu respuesta.`;
 
+const SALESCLOSER_TOOLS: SeedTool[] = [
+  {
+    name: "listar_campanas",
+    description: "Lista campañas activas o todas las campañas del sistema",
+    handlerKey: "listar_campanas",
+    parameters: {
+      type: "object",
+      properties: {
+        solo_activas: { type: "boolean" },
+        nombre: { type: "string" },
+        nombre_exacto: { type: "boolean" },
+      },
+    },
+  },
+  {
+    name: "buscar_llamadas",
+    description: "Busca llamadas por ID, fechas, campaña o cliente",
+    handlerKey: "buscar_llamadas",
+    parameters: {
+      type: "object",
+      properties: {
+        call_id: { type: "number" },
+        fecha_inicio: { type: "string" },
+        fecha_fin: { type: "string" },
+        campana: { type: "string" },
+        cliente: { type: "string" },
+        limite: { type: "number" },
+      },
+    },
+  },
+  {
+    name: "obtener_detalle_llamada",
+    description:
+      "Detalle completo Qontrol/CallDetail: resumen IA, score, criterios, acústica, transcripción o chat WhatsApp",
+    handlerKey: "obtener_detalle_llamada",
+    parameters: {
+      type: "object",
+      properties: {
+        call_id: { type: "number" },
+        seccion: {
+          type: "string",
+          description: "resumen | criterios | transcripcion | chat | acustica | callgist | completo",
+        },
+        limite_transcripcion: { type: "number" },
+      },
+      required: ["call_id"],
+    },
+  },
+  {
+    name: "obtener_transcripcion_llamada",
+    description: "Obtiene la transcripción de una llamada por su ID",
+    handlerKey: "obtener_transcripcion_llamada",
+    parameters: {
+      type: "object",
+      properties: { call_id: { type: "number" } },
+      required: ["call_id"],
+    },
+  },
+  {
+    name: "resumen_evaluacion_llamada",
+    description: "Obtiene score de compliance y evaluación IA de una llamada",
+    handlerKey: "resumen_evaluacion_llamada",
+    parameters: {
+      type: "object",
+      properties: { call_id: { type: "number" } },
+      required: ["call_id"],
+    },
+  },
+  {
+    name: "reporte_llamadas_excel",
+    description: "Genera Excel con llamadas en un rango de fechas",
+    handlerKey: "reporte_llamadas_excel",
+    parameters: {
+      type: "object",
+      properties: {
+        fecha_inicio: { type: "string" },
+        fecha_fin: { type: "string" },
+        campana: { type: "string" },
+      },
+      required: ["fecha_inicio", "fecha_fin"],
+    },
+  },
+  {
+    name: "listar_escalaciones",
+    description: "Lista escalaciones por estado (PENDING, RESOLVED, etc.)",
+    handlerKey: "listar_escalaciones",
+    parameters: {
+      type: "object",
+      properties: {
+        estado: { type: "string" },
+        limite: { type: "number" },
+      },
+    },
+  },
+  {
+    name: "obtener_reporte_estadisticas",
+    description: "Estadísticas agregadas de llamadas (scores, sentimiento, marcadas)",
+    handlerKey: "obtener_reporte_estadisticas",
+    parameters: {
+      type: "object",
+      properties: {
+        fecha_inicio: { type: "string" },
+        fecha_fin: { type: "string" },
+        campana: { type: "string" },
+        agente: { type: "string" },
+        min_score: { type: "number" },
+        max_score: { type: "number" },
+      },
+    },
+  },
+  {
+    name: "generar_poster_alerta",
+    description: "Genera poster visual en SVG para avisos internos.",
+    handlerKey: "generar_poster_alerta",
+    parameters: {
+      type: "object",
+      properties: {
+        titulo: { type: "string" },
+        mensaje: { type: "string" },
+        tema: { type: "string" },
+      },
+      required: ["titulo", "mensaje"],
+    },
+  },
+];
+
 async function main() {
   const documentId = process.env.SEED_ADMIN_DOCUMENT ?? "1000000001";
   const email = process.env.SEED_ADMIN_EMAIL ?? "admin@gptenterprice.local";
@@ -386,18 +512,25 @@ async function main() {
     funciones_disponibles: [
       "listar_campanas",
       "buscar_llamadas",
+      "obtener_detalle_llamada",
       "obtener_transcripcion_llamada",
       "resumen_evaluacion_llamada",
       "reporte_llamadas_excel",
       "listar_escalaciones",
+      "obtener_reporte_estadisticas",
     ],
   };
 
   const salesCloserPrompt = `Eres un asistente interno de SalesCloser / Qontrol.
 Respondes en español. Ayudas a supervisores y operadores a consultar llamadas, campañas, transcripciones, evaluaciones y escalaciones.
 
-Usa las herramientas disponibles para consultas de datos reales. Nunca inventes IDs, scores ni URLs.
-Si el usuario pide un Excel, el sistema lo genera en segundo plano: no inventes enlaces ni digas que ya está listo hasta tener confirmación.`;
+IMPORTANTE: Tú decides cuándo usar cada herramienta. Para datos reales SIEMPRE invoca la tool adecuada antes de responder.
+- Resumen, score, criterios, acústica o chat de una llamada → obtener_detalle_llamada(call_id, seccion)
+- Solo transcripción → obtener_transcripcion_llamada
+- Buscar por fechas/cliente → buscar_llamadas
+- Excel de llamadas → reporte_llamadas_excel
+
+Nunca inventes IDs, scores ni URLs. Resume los resultados de las tools en lenguaje claro para el usuario.`;
 
   const salesProject = await prisma.project.upsert({
     where: { id: "demo-salescloser" },
@@ -520,14 +653,11 @@ Si el usuario pide un Excel, el sistema lo genera en segundo plano: no inventes 
   const crmSystemPrompt = `Eres un asistente inteligente del CRM empresarial.
 Respondes siempre en español con claridad y precisión.
 
-Puedes consultar:
-- Clientes y usuarios/agentes
-- Gestiones (historial, última gestión por cédula, gestión por ID/alias)
-- Dashboard (métricas por periodo)
-- Árboles de tipificación, capas, flujos e ítems de catálogo
-
-Para SQL personalizado usa ejecutar_consulta_crm (solo SELECT).
-Nunca inventes datos. Si no hay resultados, dilo claramente.`;
+IMPORTANTE:
+- Tienes herramientas (functions) conectadas al CRM real.
+- Para CUALQUIER dato (clientes, gestiones, estadísticas, árboles, capas) DEBES invocar la herramienta correspondiente.
+- NUNCA escribas SQL ni digas "puedes usar la función X". Ejecuta la herramienta y responde con los resultados.
+- Si no hay resultados, dilo claramente.`;
 
   const crmContext = {
     nombre: "CRM Empresarial",
@@ -582,22 +712,7 @@ Nunca inventes datos. Si no hay resultados, dilo claramente.`;
   console.log(`Proyecto CRM: ${crmProject.name} (${crmProject.id})`);
 
   await upsertProjectTools("demo-crm", CRM_TOOLS);
-  await upsertProjectTools("demo-salescloser", [
-    {
-      name: "generar_poster_alerta",
-      description: "Genera poster visual en SVG para avisos internos.",
-      handlerKey: "generar_poster_alerta",
-      parameters: {
-        type: "object",
-        properties: {
-          titulo: { type: "string" },
-          mensaje: { type: "string" },
-          tema: { type: "string" },
-        },
-        required: ["titulo", "mensaje"],
-      },
-    },
-  ]);
+  await upsertProjectTools("demo-salescloser", SALESCLOSER_TOOLS);
   await upsertProjectTools("demo-rrhh", [
     {
       name: "generar_poster_alerta",

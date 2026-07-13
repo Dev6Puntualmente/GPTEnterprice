@@ -7,27 +7,29 @@ type GlassCardProps = HTMLMotionProps<"div"> & {
   children: React.ReactNode;
   className?: string;
   hover?: boolean;
+  flat?: boolean;
 };
 
 export default function GlassCard({
   children,
   className = "",
   hover = false,
+  flat = false,
   ...props
 }: GlassCardProps) {
   const { colors } = useTheme();
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 12 }}
+      initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ type: "spring", stiffness: 260, damping: 24 }}
-      whileHover={hover ? { y: -2, scale: 1.005 } : undefined}
-      className={`rounded-[1.35rem] border backdrop-blur-2xl ${className}`}
+      transition={{ type: "spring", stiffness: 280, damping: 28 }}
+      whileHover={hover ? { y: -1 } : undefined}
+      className={`rounded-2xl border ${flat ? "" : "backdrop-blur-xl"} ${className}`}
       style={{
         background: colors.panel,
         borderColor: colors.border,
-        boxShadow: `0 24px 80px ${colors.glow}, inset 0 1px 0 rgba(255,255,255,0.08)`,
+        boxShadow: flat ? "none" : colors.shadow,
       }}
       {...props}
     >

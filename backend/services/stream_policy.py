@@ -5,11 +5,16 @@ from typing import Any
 
 from config import settings
 
-# Solo SQL custom requiere tool-calling nativo en vLLM.
-_NATIVE_ONLY_HINTS = (
-    r"ejecuta(?:r|)\s+(?:una\s+)?consulta\s+sql",
-    r"consulta\s+sql\s+select",
-    r"select\s+.+\s+from\s+crm\.",
+_GENERAL_ONLY = (
+    r"^(?:hola|buenos|buenas|hey|hi)\b",
+    r"qu[eé]\s+es\s+(?:un\s+)?excel\b",
+    r"qu[eé]\s+(?:m[aá]s\s+)?(?:puedes|pod[eé]s|haces|sabes|ofreces)",
+    r"qu[eé]\s+(?:otras?\s+)?(?:herramientas?|funciones?|cosas?|opciones?)",
+    r"(?:lista|enumera|dime|mu[eé]strame)\s+(?:las?\s+)?(?:herramientas?|funciones?|capacidades?|opciones?)",
+    r"c[oó]mo\s+(?:funciona|te\s+uso|puedo\s+usarte)",
+    r"(?:en\s+qu[eé]|qu[eé]\s+m[aá]s)\s+(?:me\s+)?(?:puedes|pod[eé]s)\s+(?:ayudar|hacer)",
+    r"^\s*(?:gracias|ok|vale|perfecto|entendido|okey)\s*[,!.]?$",
+    r"^\s*okey,?\s+qu[eé]\s+es\b",
 )
 
 
@@ -20,17 +25,9 @@ def _last_user_text(messages: list[dict[str, Any]]) -> str:
     return ""
 
 
-def message_needs_native_vllm_tools(
-    messages: list[dict[str, Any]],
-    tool_names: list[str],
-) -> bool:
-    """True solo cuando sync/heavy no bastan y hace falta el loop nativo de vLLM."""
-    if not settings.vllm_tools_enabled or not tool_names:
-        return False
-    text = _last_user_text(messages).lower()
-    if not text:
-        return False
-    return any(re.search(pattern, text, re.IGNORECASE) for pattern in _NATIVE_ONLY_HINTS)
+def _is_general_question(text: str) -> bool:
+    lowered = text.lower().strip()
+    return any(re.search(pattern, lowered, re.IGNORECASE) for pattern in _GENERAL_ONLY)
 
 
 def resolve_effective_stream(
@@ -39,20 +36,20 @@ def resolve_effective_stream(
     tool_names: list[str],
 ) -> bool:
     """
-    Híbrido automático:
-    - Chat normal → streaming.
-    - Sync/heavy tools → el caller emite pseudo-stream; mantener stream_requested.
-    - SQL custom / poster sin sync → desactivar stream para tools nativas.
+    - Charla general → streaming directo del LLM (sin tools).
+    - Resto (con tools en el proyecto) → agente LLM + tools.
     """
     if not stream_requested:
         return False
 
-    from services.sync_tools import detect_sync_tool_intent
+    if settings.vllm_tools_enabled and tool_names:
+        if not _is_general_question(_last_user_text(messages)):
+            return False
 
-    if detect_sync_tool_intent(messages, tool_names):
-        return True
+    if settings.use_sync_tools:
+        from services.sync_tools import detect_sync_tool_intent
 
-    if message_needs_native_vllm_tools(messages, tool_names):
-        return False
+        if detect_sync_tool_intent(messages, tool_names):
+            return True
 
     return True

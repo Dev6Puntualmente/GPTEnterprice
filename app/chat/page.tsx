@@ -6,7 +6,6 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import { ChatWindow } from "@/app/components/ChatWindow";
 import GlassButton from "@/app/components/ui/GlassButton";
-import GlassCard from "@/app/components/ui/GlassCard";
 import ThemeToggle from "@/app/components/theme/ThemeToggle";
 import { useTheme } from "@/app/components/theme/ThemeProvider";
 
@@ -23,9 +22,24 @@ type Conversation = {
   updatedAt: string;
 };
 
+function formatRelativeDate(iso: string) {
+  try {
+    const date = new Date(iso);
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    if (days === 0) return "Hoy";
+    if (days === 1) return "Ayer";
+    if (days < 7) return `${days}d`;
+    return date.toLocaleDateString("es", { day: "numeric", month: "short" });
+  } catch {
+    return "";
+  }
+}
+
 export default function ChatPage() {
   const { data: session } = useSession();
-  const { colors } = useTheme();
+  const { colors, mode } = useTheme();
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -67,7 +81,8 @@ export default function ChatPage() {
         <motion.div
           animate={{ opacity: [0.4, 1, 0.4] }}
           transition={{ duration: 1.4, repeat: Infinity }}
-          style={{ color: colors.textSoft }}
+          style={{ color: colors.textMuted }}
+          className="text-sm"
         >
           Cargando...
         </motion.div>
@@ -78,118 +93,173 @@ export default function ChatPage() {
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
 
   return (
-    <div className="h-screen overflow-hidden p-3 md:p-5">
-      <div className="mx-auto grid h-full max-w-7xl grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[290px_1fr]">
-        <GlassCard className="flex min-h-0 flex-col overflow-hidden p-4 md:p-5">
-          <div className="mb-5 flex items-start justify-between gap-3">
-            <div>
-              <p className="text-[10px] uppercase tracking-[0.24em]" style={{ color: colors.textMuted }}>
-                GPTEnterprice
-              </p>
-              <h1 className="text-xl font-semibold tracking-tight" style={{ color: colors.text }}>
-                Agente interno
-              </h1>
+    <div className="h-screen overflow-x-hidden overflow-y-hidden p-2 sm:p-4">
+      <div className="mx-auto grid h-full max-w-[1400px] grid-cols-1 gap-3 overflow-hidden lg:grid-cols-[272px_1fr]">
+        {/* Sidebar */}
+        <aside
+          className="flex min-h-0 flex-col overflow-hidden rounded-2xl border"
+          style={{
+            background: colors.panel,
+            borderColor: colors.border,
+            boxShadow: colors.shadow,
+          }}
+        >
+          {/* Brand */}
+          <div
+            className="flex items-center justify-between gap-2 border-b px-4 py-4"
+            style={{ borderColor: colors.border }}
+          >
+            <div className="flex items-center gap-2.5">
+              <div
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold text-white"
+                style={{
+                  background: `linear-gradient(135deg, ${colors.accent}, color-mix(in srgb, ${colors.accent} 70%, #3b82f6))`,
+                }}
+              >
+                G
+              </div>
+              <div>
+                <p className="text-sm font-semibold leading-tight" style={{ color: colors.text }}>
+                  GPTEnterprice
+                </p>
+                <p className="text-[11px]" style={{ color: colors.textMuted }}>
+                  Agente interno
+                </p>
+              </div>
             </div>
             <ThemeToggle />
           </div>
 
-          <label className="mb-2 block text-[11px] font-medium uppercase tracking-[0.18em]" style={{ color: colors.textMuted }}>
-            Proyecto
-          </label>
-          <select
-            value={selectedProjectId ?? ""}
-            onChange={(e) => setSelectedProjectId(e.target.value)}
-            className="mb-4 w-full rounded-2xl border px-3 py-2.5 text-sm backdrop-blur-md outline-none"
-            style={{
-              borderColor: colors.border,
-              background: "rgba(255,255,255,0.05)",
-              color: colors.text,
-            }}
-          >
-            {projects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.name}
-              </option>
-            ))}
-          </select>
-
-          {selectedProject ? (
-            <div
-              className="mb-4 rounded-2xl p-3 text-sm backdrop-blur-md"
+          {/* Project */}
+          <div className="border-b px-3 py-3" style={{ borderColor: colors.border }}>
+            <label
+              className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider"
+              style={{ color: colors.textMuted }}
+            >
+              Proyecto
+            </label>
+            <select
+              value={selectedProjectId ?? ""}
+              onChange={(e) => setSelectedProjectId(e.target.value)}
+              className="w-full rounded-lg border px-3 py-2 text-sm outline-none transition focus:ring-2"
               style={{
-                background: "rgba(255,255,255,0.05)",
-                color: colors.textSoft,
-                border: `1px solid ${colors.border}`,
+                borderColor: colors.borderStrong,
+                background: colors.input,
+                color: colors.text,
+                boxShadow: mode === "light" ? "0 1px 2px rgba(15,23,42,0.04)" : "none",
               }}
             >
-              <p>{selectedProject.description}</p>
-              <p className="mt-2 text-xs" style={{ color: colors.textMuted }}>
-                {selectedProject.tools.length} herramientas activas
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+            {selectedProject ? (
+              <p className="mt-2 line-clamp-2 text-[11px] leading-relaxed" style={{ color: colors.textMuted }}>
+                {selectedProject.description}
               </p>
-            </div>
-          ) : null}
+            ) : null}
+          </div>
 
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-medium" style={{ color: colors.text }}>
-              Conversaciones
-            </h2>
-            <GlassButton variant="soft" onClick={() => setSelectedConversationId(null)} className="px-3 py-1.5 text-xs">
-              Nueva
+          {/* Conversations header */}
+          <div className="flex items-center justify-between px-3 pb-2 pt-3">
+            <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: colors.textMuted }}>
+              Chats
+            </span>
+            <GlassButton
+              variant="soft"
+              size="sm"
+              onClick={() => setSelectedConversationId(null)}
+              className="!rounded-md"
+            >
+              + Nuevo
             </GlassButton>
           </div>
 
-          <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto overscroll-contain pr-1">
-            {conversations.map((conversation) => {
-              const active = selectedConversationId === conversation.id;
-              return (
-                <motion.button
-                  key={conversation.id}
-                  type="button"
-                  whileHover={{ x: 2 }}
-                  onClick={() => setSelectedConversationId(conversation.id)}
-                  className="w-full rounded-2xl px-3 py-2.5 text-left text-sm transition backdrop-blur-md"
-                  style={{
-                    background: active ? colors.accentSoft : "rgba(255,255,255,0.03)",
-                    color: active ? colors.accent : colors.textSoft,
-                    border: `1px solid ${active ? `${colors.accent}33` : colors.border}`,
-                  }}
-                >
-                  <span className="line-clamp-2">{conversation.title}</span>
-                </motion.button>
-              );
-            })}
+          {/* Conversation list */}
+          <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-contain px-2 pb-2">
+            {conversations.length === 0 ? (
+              <p className="px-2 py-6 text-center text-xs" style={{ color: colors.textMuted }}>
+                Sin conversaciones aún
+              </p>
+            ) : (
+              conversations.map((conversation) => {
+                const active = selectedConversationId === conversation.id;
+                return (
+                  <motion.button
+                    key={conversation.id}
+                    type="button"
+                    onClick={() => setSelectedConversationId(conversation.id)}
+                    whileHover={{ x: 2 }}
+                    transition={{ type: "spring", stiffness: 420, damping: 32, mass: 0.6 }}
+                    className="ui-smooth group relative w-full min-w-0 rounded-lg px-2.5 py-2 text-left"
+                    style={{
+                      background: active ? colors.accentSoft : "transparent",
+                      color: active ? colors.text : colors.textSoft,
+                    }}
+                  >
+                    {active ? (
+                      <span
+                        className="absolute bottom-2 left-0 top-2 w-0.5 rounded-full"
+                        style={{ background: colors.accent }}
+                      />
+                    ) : null}
+                    <div className="flex items-start justify-between gap-2 pl-1">
+                      <span className="line-clamp-2 text-[13px] font-medium leading-snug">
+                        {conversation.title || "Sin título"}
+                      </span>
+                      <span
+                        className="shrink-0 text-[10px] tabular-nums"
+                        style={{ color: colors.textMuted }}
+                      >
+                        {formatRelativeDate(conversation.updatedAt)}
+                      </span>
+                    </div>
+                  </motion.button>
+                );
+              })
+            )}
           </div>
 
-          <div className="mt-4 space-y-2 border-t pt-4" style={{ borderColor: colors.border }}>
+          {/* Footer nav */}
+          <div
+            className="shrink-0 space-y-0.5 border-t px-2 py-3"
+            style={{ borderColor: colors.border, background: colors.surfaceMuted }}
+          >
             <Link
               href="/settings/ai-servers"
-              className="block rounded-xl px-2 py-1.5 text-sm transition hover:opacity-80"
-              style={{ color: colors.accent }}
+              className="ui-smooth flex items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] font-medium hover:bg-black/[0.03] dark:hover:bg-white/[0.04]"
+              style={{ color: colors.textSoft }}
             >
-              Proveedores de IA
+              <span style={{ color: colors.accent }}>◆</span>
+              Proveedores IA
             </Link>
             <Link
               href="/projects"
-              className="block rounded-xl px-2 py-1.5 text-sm transition hover:opacity-80"
-              style={{ color: colors.textSoft }}
+              className="ui-smooth flex items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] hover:bg-black/[0.03] dark:hover:bg-white/[0.04]"
+              style={{ color: colors.textMuted }}
             >
-              Administrar proyectos
+              <span>◇</span>
+              Proyectos
             </Link>
-            <p className="truncate px-2 text-xs" style={{ color: colors.textMuted }}>
-              Doc. {session?.user?.documentId}
-            </p>
-            <button
-              type="button"
-              onClick={() => signOut({ callbackUrl: "/login" })}
-              className="px-2 text-sm underline-offset-2 hover:underline"
-              style={{ color: colors.textSoft }}
-            >
-              Cerrar sesión
-            </button>
+            <div className="flex items-center justify-between px-2.5 pt-2">
+              <p className="truncate text-[11px]" style={{ color: colors.textMuted }}>
+                {session?.user?.documentId}
+              </p>
+              <button
+                type="button"
+                onClick={() => signOut({ callbackUrl: "/login" })}
+                className="text-[11px] font-medium transition hover:opacity-70"
+                style={{ color: colors.textMuted }}
+              >
+                Salir
+              </button>
+            </div>
           </div>
-        </GlassCard>
+        </aside>
 
-        <main className="flex min-h-0 flex-col overflow-hidden">
+        <main className="flex min-h-0 min-w-0 flex-col overflow-hidden">
           {selectedProjectId ? (
             <ChatWindow
               conversationId={selectedConversationId}

@@ -1,20 +1,15 @@
 from __future__ import annotations
 
-
-
 import json
-
+import logging
 from typing import Any
-
-
 
 from openai import OpenAI
 
-
-
 from config import settings
-
 from tools.registry import execute_tool
+
+logger = logging.getLogger("gptenterprice.agent")
 
 
 
@@ -134,6 +129,8 @@ def run_agent(
 
 
         if choice.tool_calls:
+            tool_names = [tc.function.name for tc in choice.tool_calls]
+            logger.info("LLM solicitó tools: %s", tool_names)
 
             conversation.append(
 

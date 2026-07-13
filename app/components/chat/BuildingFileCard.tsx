@@ -19,7 +19,7 @@ export function BuildingFileCard({
   fileUrl,
   error,
 }: BuildingFileCardProps) {
-  const { colors } = useTheme();
+  const { colors, mode } = useTheme();
   const isDone = job.status === "SUCCEEDED" || Boolean(fileUrl);
   const isFailed = job.status === "FAILED" || Boolean(error);
 
@@ -29,9 +29,9 @@ export function BuildingFileCard({
       animate={{ opacity: 1, y: 0 }}
       className="mt-3 overflow-hidden rounded-2xl border backdrop-blur-xl"
       style={{
-        background: "rgba(255,255,255,0.06)",
-        borderColor: isFailed ? `${colors.danger}55` : `${colors.accent}33`,
-        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.08), 0 12px 40px ${colors.glow}`,
+        background: colors.surfaceMuted,
+        borderColor: isFailed ? `${colors.danger}40` : colors.border,
+        boxShadow: mode === "light" ? "0 2px 8px rgba(15,23,42,0.04)" : `0 8px 24px ${colors.glow}`,
       }}
     >
       <div className="flex items-center gap-3 px-4 py-3">
@@ -81,7 +81,7 @@ export function BuildingFileCard({
         <div className="px-4 pb-3">
           <div
             className="h-1.5 overflow-hidden rounded-full"
-            style={{ background: "rgba(255,255,255,0.08)" }}
+            style={{ background: colors.border }}
           >
             <motion.div
               className="h-full rounded-full"

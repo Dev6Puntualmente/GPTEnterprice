@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { fetchAgent } from "@/lib/agent-fetch";
 import { getAgentApiUrl } from "@/lib/env";
 import { requireAuth } from "@/lib/require-auth";
 
@@ -9,10 +10,11 @@ export async function GET() {
   const agentApiUrl = getAgentApiUrl();
 
   try {
-    const response = await fetch(`${agentApiUrl}/health`, {
-      signal: AbortSignal.timeout(5_000),
-      cache: "no-store",
-    });
+    const response = await fetchAgent(
+      `${agentApiUrl}/health`,
+      { cache: "no-store" },
+      { timeoutMs: 5_000, retries: 1, retryDelayMs: 400 },
+    );
     const body = await response.text();
 
     const parsed = JSON.parse(body) as { status?: string; version?: string };

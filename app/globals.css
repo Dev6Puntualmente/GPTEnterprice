@@ -2,10 +2,10 @@
 
 :root,
 [data-theme="light"] {
-  --background: #f4f6fb;
+  --background: #f6f7fb;
   --foreground: #0f172a;
-  --panel: rgba(255, 255, 255, 0.72);
-  --accent: #6366f1;
+  --panel: #ffffff;
+  --accent: #5b5bd6;
 }
 
 [data-theme="dark"] {
@@ -28,6 +28,7 @@
 
 html {
   color-scheme: light dark;
+  overflow-x: hidden;
 }
 
 body {
@@ -35,6 +36,17 @@ body {
   color: var(--foreground);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
   min-height: 100vh;
+  overflow-x: hidden;
+}
+
+.ui-smooth {
+  transition:
+    background-color 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 ::selection {

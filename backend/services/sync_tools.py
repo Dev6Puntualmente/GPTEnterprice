@@ -35,6 +35,17 @@ WEIGHTED_TOOL_HINTS: dict[str, list[tuple[str, int]]] = {
         (r"compliance", 4),
         (r"\bscore\b", 3),
     ],
+    "obtener_detalle_llamada": [
+        (r"resumen\s+de\s+la\s+llamada", 9),
+        (r"detalle\s+de\s+la\s+llamada", 9),
+        (r"informaci[oó]n\s+de\s+la\s+llamada", 8),
+        (r"calificaci[oó]n(?:es)?\s+(?:de\s+)?(?:la\s+)?llamada", 8),
+        (r"criterios?\s+(?:de\s+)?(?:la\s+)?llamada", 8),
+        (r"momentos?\s+clave", 7),
+        (r"callgist|gesti[oó]n\s+callhistory", 7),
+        (r"ac[uú]stic|estr[eé]s|silencio", 6),
+        (r"auditor[ií]a", 5),
+    ],
     "obtener_transcripcion_llamada": [
         (r"transcrip", 6),
         (r"transcri", 5),
@@ -80,12 +91,14 @@ CLARIFY_MESSAGES: dict[str, str] = {
 
 GENERAL_QUESTION_PATTERNS = (
     r"^(?:hola|buenos|buenas|hey|hi)\b",
+    r"qu[eé]\s+es\s+(?:un\s+)?excel\b",
     r"qu[eé]\s+(?:m[aá]s\s+)?(?:puedes|pod[eé]s|haces|sabes|ofreces)",
     r"qu[eé]\s+(?:otras?\s+)?(?:herramientas?|funciones?|cosas?|opciones?)",
     r"(?:lista|enumera|dime|mu[eé]strame)\s+(?:las?\s+)?(?:herramientas?|funciones?|capacidades?|opciones?)",
     r"c[oó]mo\s+(?:funciona|te\s+uso|puedo\s+usarte)",
     r"(?:en\s+qu[eé]|qu[eé]\s+m[aá]s)\s+(?:me\s+)?(?:puedes|pod[eé]s)\s+(?:ayudar|hacer)",
-    r"^\s*(?:gracias|ok|vale|perfecto|entendido)\s*\.?$",
+    r"^\s*(?:gracias|ok|vale|perfecto|entendido|okey)\s*[,!.]?$",
+    r"^\s*okey,?\s+qu[eé]\s+es\b",
 )
 
 
@@ -162,6 +175,92 @@ def _is_general_question(text: str) -> bool:
     return any(re.search(pattern, lowered, re.IGNORECASE) for pattern in GENERAL_QUESTION_PATTERNS)
 
 
+def _normalize_tool_hint(text: str) -> str:
+    lowered = text.lower().strip()
+    lowered = re.sub(r"[^\w\s]", " ", lowered)
+    return re.sub(r"\s+", "_", lowered).strip("_")
+
+
+def _detect_explicit_tool_request(text: str, allowed: set[str]) -> dict[str, Any] | None:
+    """'Usa la función de resumen estadísticas' → ejecuta la tool por nombre."""
+    match = re.search(
+        r"usa(?:r)?\s+(?:la\s+)?(?:funci[oó]n|herramienta|tool)\s+(?:de\s+)?([^\n,.?!]+)",
+        text,
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+
+    hint = _normalize_tool_hint(match.group(1))
+    if not hint:
+        return None
+
+    aliases = {
+        "crm_resumen_estadisticas": (
+            "resumen_estadisticas",
+            "resumen_estadistica",
+            "estadisticas",
+            "estadistica",
+        ),
+        "crm_dashboard_resumen": ("dashboard", "dashboard_resumen", "dashboard_crm"),
+    }
+
+    for tool in allowed:
+        tool_slug = tool.lower()
+        if hint == tool_slug or hint in tool_slug or tool_slug in hint:
+            return {"tool": tool, "args": {}, "user_text": text}
+        for alias in aliases.get(tool, ()):
+            if alias in hint or hint in alias:
+                return {"tool": tool, "args": {}, "user_text": text}
+
+    return None
+
+
+def _detect_crm_stats_intent(
+    text: str,
+    user_context: str,
+    allowed: set[str],
+) -> dict[str, Any] | None:
+    """Resumen/estadísticas CRM — solo mensajes del usuario (no contamina el listado de tools del asistente)."""
+    wants_stats_now = re.search(
+        r"estad[ií]stica|resumen\s+(?:de\s+)?(?:las?\s+)?estad|m[eé]trica(?:s)?(?:\s+del?\s+crm)?|dashboard",
+        text,
+        re.IGNORECASE,
+    )
+    followup_period = re.search(
+        r"(?:las?|los?)\s+(?:del?\s+)?(?:de\s+)?(?:este\s+mes|el\s+mes|esta\s+semana|hoy)"
+        r"|(?:del?\s+)?(?:este\s+mes|esta\s+semana)\b",
+        text,
+        re.IGNORECASE,
+    )
+    prior_user = user_context.rsplit("\n", 1)[0] if user_context else ""
+    wants_stats_prior = bool(
+        prior_user
+        and re.search(
+            r"estad[ií]stica|resumen\s+(?:de\s+)?(?:las?\s+)?estad|m[eé]trica(?:s)?|dashboard",
+            prior_user,
+            re.IGNORECASE,
+        )
+    )
+
+    if not wants_stats_now and not (followup_period and wants_stats_prior):
+        return None
+
+    date_source = f"{user_context}\n{text}".strip()
+    date_range = extract_date_range(date_source)
+    if "crm_dashboard_resumen" in allowed and date_range:
+        return {
+            "tool": "crm_dashboard_resumen",
+            "args": {"fecha_inicio": date_range[0], "fecha_fin": date_range[1]},
+            "user_text": text,
+        }
+
+    if "crm_resumen_estadisticas" in allowed and wants_stats_now:
+        return {"tool": "crm_resumen_estadisticas", "args": {}, "user_text": text}
+
+    return None
+
+
 def _is_id_followup(text: str) -> bool:
     lowered = text.strip().lower()
     if re.fullmatch(r"\d{1,10}", lowered):
@@ -224,6 +323,120 @@ def _detect_clarification(
     return None
 
 
+def _infer_call_detail_section(text: str) -> str:
+    lowered = text.lower()
+    if re.search(r"transcrip", lowered):
+        return "transcripcion"
+    if re.search(r"whatsapp|chat\b", lowered):
+        return "chat"
+    if re.search(r"criterio|calificaci", lowered):
+        return "criterios"
+    if re.search(r"ac[uú]stic|estr[eé]s|silencio|pitch", lowered):
+        return "acustica"
+    if re.search(r"callgist|callhistory", lowered):
+        return "callgist"
+    if re.search(r"resumen|detalle|informaci", lowered):
+        return "resumen"
+    return "completo"
+
+
+def _format_call_detail_body(data: dict[str, Any]) -> str:
+    detalle = data.get("detalle") or {}
+    cab = detalle.get("cabecera") or {}
+    score = detalle.get("score") or {}
+    resumen = detalle.get("resumen") or {}
+    criterios = detalle.get("criterios") or {}
+    acustica = detalle.get("acustica")
+    transcripcion = detalle.get("transcripcion") or {}
+    chat = detalle.get("chat_whatsapp") or {}
+    callgist = detalle.get("callgist")
+
+    lines = [
+        f"**Auditoría Qontrol — llamada #{data.get('call_id')}**",
+        f"- Cliente: **{cab.get('cliente', 'N/D')}**"
+        + (f" (CC {cab.get('documento_cliente')})" if cab.get("documento_cliente") else ""),
+        f"- Agente: {cab.get('agente', 'N/D')}"
+        + (f" (CC {cab.get('documento_agente')})" if cab.get("documento_agente") else ""),
+        f"- Campaña: {cab.get('campana', 'N/D')} · Canal: {cab.get('canal', 'N/D')}",
+        f"- Marcada: {'Sí' if cab.get('marcada') else 'No'}",
+        f"- Fecha llamada: {cab.get('fecha_llamada') or 'N/D'} · Auditoría: {cab.get('fecha_auditoria', 'N/D')}",
+    ]
+
+    if score:
+        lines.extend([
+            "",
+            f"**{score.get('etiqueta', 'Score')}:** {score.get('valor', 'N/D')}%"
+            + (f" · Sentimiento: **{score.get('sentimiento')}**" if score.get("sentimiento") else ""),
+        ])
+        if score.get("calibrado"):
+            lines.append("_Calibración humana aplicada._")
+
+    if resumen.get("texto"):
+        lines.extend(["", "**Resumen IA**", resumen["texto"]])
+
+    momentos = resumen.get("momentos_clave") or []
+    if momentos:
+        lines.append("\n**Momentos clave**")
+        for idx, momento in enumerate(momentos[:8], start=1):
+            texto = momento.get("text") if isinstance(momento, dict) else str(momento)
+            start = momento.get("start") if isinstance(momento, dict) else None
+            suffix = f" (t+{int(start)}s)" if isinstance(start, (int, float)) and start > 0 else ""
+            lines.append(f"{idx}. {texto}{suffix}")
+
+    if callgist:
+        lines.extend([
+            "",
+            f"**CallHistory — {'Alineada' if callgist.get('aligned') else 'Con diferencias'}**",
+            callgist.get("comparisonSummary") or callgist.get("comparison_summary") or "",
+        ])
+        if callgist.get("managementText") or callgist.get("management_text"):
+            lines.append(f"_CRM:_ {callgist.get('managementText') or callgist.get('management_text')}")
+
+    if criterios.get("resultados"):
+        lines.extend([
+            "",
+            f"**Criterios** — {criterios.get('cumplidos', 0)} cumplidos / "
+            f"{criterios.get('no_cumplidos', 0)} no cumplidos "
+            f"(evaluados {criterios.get('total_evaluados', 0)})",
+        ])
+        for item in criterios.get("resultados", [])[:12]:
+            lines.append(
+                f"- **{item.get('titulo', 'Criterio')}** · {item.get('estado', 'N/D')}"
+                + (f" · peso {item.get('peso')}%" if item.get("peso") is not None else "")
+            )
+            if item.get("justificacion"):
+                lines.append(f"  _{str(item['justificacion'])[:220]}_")
+
+    if acustica:
+        lines.extend([
+            "",
+            "**Análisis acústico**",
+            f"- Pitch promedio: {acustica.get('average_pitch', 'N/D')} Hz",
+            f"- Pico energía: {acustica.get('peak_energy', 'N/D')}",
+            f"- Silencios >3s: {acustica.get('silence_count', 'N/D')}",
+            f"- Estrés detectado: {'Sí' if acustica.get('stress_detected') else 'No'}",
+        ])
+
+    segmentos = transcripcion.get("segmentos") or []
+    if segmentos:
+        lines.extend(["", f"**Transcripción** ({transcripcion.get('total_segmentos', len(segmentos))} segmentos)"])
+        for seg in segmentos[:15]:
+            speaker = seg.get("speaker", "N/D")
+            text = seg.get("text", "")
+            lines.append(f"- **{speaker}:** {text[:240]}")
+
+    mensajes = chat.get("mensajes") or []
+    if mensajes:
+        lines.extend(["", f"**Chat WhatsApp** ({chat.get('total_mensajes', len(mensajes))} mensajes)"])
+        for msg in mensajes[:12]:
+            if isinstance(msg, dict):
+                sender = msg.get("sender") or msg.get("senderName") or "N/D"
+                content = msg.get("content") or msg.get("text") or ""
+                lines.append(f"- **{sender}:** {str(content)[:200]}")
+
+    return "\n".join(lines)
+
+
 def _format_tool_result(
     tool: str,
     raw: str,
@@ -270,6 +483,11 @@ def _format_tool_result(
             f"Compliance score: {data.get('compliance_score', 'N/D')}\n\n"
             f"{data.get('ai_evaluation') or json.dumps(data.get('evaluation_data'), ensure_ascii=False, indent=2)}"
         )
+
+    if tool == "obtener_detalle_llamada":
+        if not data.get("success"):
+            return prefix + (data.get("mensaje") or "No encontré el detalle de esa llamada.")
+        return prefix + _format_call_detail_body(data)
 
     if tool == "listar_campanas":
         campaigns = data.get("campanas") or []
@@ -571,7 +789,19 @@ def _extract_gestion_id(text: str) -> str | None:
 
 
 def _wants_ultima_gestion(text: str) -> bool:
-    return bool(re.search(r"[uú]ltim[ao]\s+gesti[oó]n", text, re.IGNORECASE))
+    """Una sola gestión: 'última gestión'."""
+    return bool(re.search(r"[uú]ltim[ao]\s+gesti[oó]n\b", text, re.IGNORECASE))
+
+
+def _wants_gestiones_recientes(text: str) -> bool:
+    """Varias gestiones: 'últimas gestiones', 'gestiones recientes'."""
+    return bool(
+        re.search(
+            r"[uú]ltimas?\s+gesti[oó]nes?|gesti[oó]n(?:es)?\s+recientes?",
+            text,
+            re.IGNORECASE,
+        )
+    )
 
 
 def _extract_poster_fields(text: str) -> dict[str, str]:
@@ -627,6 +857,40 @@ def detect_sync_tool_intent(
     if _is_general_question(text):
         return None
 
+    explicit = _detect_explicit_tool_request(text, allowed)
+    if explicit:
+        tool = explicit["tool"]
+        args = dict(explicit.get("args") or {})
+        if tool == "crm_dashboard_resumen" or tool == "crm_resumen_estadisticas":
+            date_range = extract_date_range(f"{user_context}\n{text}".strip())
+            if date_range and "crm_dashboard_resumen" in allowed:
+                return {
+                    "tool": "crm_dashboard_resumen",
+                    "args": {"fecha_inicio": date_range[0], "fecha_fin": date_range[1]},
+                    "user_text": text,
+                }
+        return explicit
+
+    doc_match = _extract_documento(text)
+    if "crm_buscar_clientes" in allowed and re.search(
+        r"busca(?:r|a).{0,40}cliente|cliente.{0,40}\d|documento|c[eé]dula",
+        text,
+        re.IGNORECASE,
+    ):
+        args: dict[str, Any] = {}
+        if doc_match:
+            args["documento"] = doc_match
+        else:
+            name = re.search(r"cliente\s+([^\n,.?!]+)", text, re.IGNORECASE)
+            if name:
+                args["query"] = name.group(1).strip()
+        if args:
+            return {"tool": "crm_buscar_clientes", "args": args, "user_text": text}
+
+    stats_intent = _detect_crm_stats_intent(text, user_context, allowed)
+    if stats_intent:
+        return stats_intent
+
     if "generar_poster_alerta" in allowed and re.search(
         r"(?:crea|genera|haz).{0,24}(?:poster|cartel)|\bposter\b|\bcartel\b|aviso\s+visual",
         text,
@@ -649,6 +913,22 @@ def detect_sync_tool_intent(
     current_scores = _current_tool_scores(text, allowed)
     call_id = _resolve_call_id(text, messages, current_scores)
 
+    if "obtener_detalle_llamada" in allowed:
+        detail_call_id = call_id or _extract_call_id(text) or _extract_call_id_from_context(messages)
+        if detail_call_id and re.search(
+            r"resumen|detalle|informaci|calificaci|criterio|auditor[ií]a|llamada|ac[uú]stic|callgist|momentos?",
+            text,
+            re.IGNORECASE,
+        ):
+            return {
+                "tool": "obtener_detalle_llamada",
+                "args": {
+                    "call_id": detail_call_id,
+                    "seccion": _infer_call_detail_section(text),
+                },
+                "user_text": text,
+            }
+
     clarify = _detect_clarification(text, allowed, call_id)
     if clarify:
         return clarify
@@ -659,6 +939,19 @@ def detect_sync_tool_intent(
             return None
 
         best_tool = _pick_best_tool(current_scores, full_context, allowed)
+
+        if (
+            "obtener_detalle_llamada" in allowed
+            and best_tool == "obtener_detalle_llamada"
+        ):
+            return {
+                "tool": "obtener_detalle_llamada",
+                "args": {
+                    "call_id": call_id,
+                    "seccion": _infer_call_detail_section(text),
+                },
+                "user_text": text,
+            }
 
         if (
             "obtener_transcripcion_llamada" in allowed
@@ -709,7 +1002,7 @@ def detect_sync_tool_intent(
 
     doc_match = _extract_documento(text)
 
-    # ── CRM gestiones ─────────────────────────────────────────────────────────
+    # crm_buscar_clientes: bloque duplicado al final por compatibilidad (el early-return ya cubre la mayoría)
     gestion_id = _extract_gestion_id(text)
     if "crm_obtener_gestion" in allowed and gestion_id and re.search(
         r"gesti[oó]n|gestiones",
@@ -728,6 +1021,8 @@ def detect_sync_tool_intent(
             args["documento"] = doc_match
         if _wants_ultima_gestion(text):
             args["solo_ultima"] = True
+        elif _wants_gestiones_recientes(text):
+            args["limite"] = args.get("limite", 15)
         else:
             cliente = re.search(r"cliente\s+([^\n,.?!]+)", text, re.IGNORECASE)
             if cliente:
@@ -752,7 +1047,7 @@ def detect_sync_tool_intent(
         re.IGNORECASE,
     ) and not re.search(r"whatsapp|tipol[oó]g|agente", text, re.IGNORECASE):
         args = {}
-        date_range = extract_date_range(full_context)
+        date_range = extract_date_range(f"{user_context}\n{text}".strip())
         if date_range:
             args["fecha_inicio"], args["fecha_fin"] = date_range
         return {"tool": "crm_dashboard_resumen", "args": args, "user_text": text}
@@ -872,7 +1167,7 @@ def detect_sync_tool_intent(
     ):
         args: dict[str, Any] = {}
         if doc_match:
-            args["documento"] = doc_match.group(1)
+            args["documento"] = doc_match
         else:
             name = re.search(r"cliente\s+([^\n,.?!]+)", text, re.IGNORECASE)
             if name:
@@ -887,7 +1182,7 @@ def detect_sync_tool_intent(
     ):
         args: dict[str, Any] = {}
         if doc_match:
-            args["query"] = doc_match.group(1)
+            args["query"] = doc_match
         else:
             name = re.search(r"usuario\s+([^\n,.?!]+)", text, re.IGNORECASE)
             if name:
@@ -900,6 +1195,13 @@ def detect_sync_tool_intent(
         text,
         re.IGNORECASE,
     ) and not re.search(r"llamad|reporte|dashboard", text, re.IGNORECASE):
+        date_range = extract_date_range(f"{user_context}\n{text}".strip())
+        if date_range and "crm_dashboard_resumen" in allowed:
+            return {
+                "tool": "crm_dashboard_resumen",
+                "args": {"fecha_inicio": date_range[0], "fecha_fin": date_range[1]},
+                "user_text": text,
+            }
         return {"tool": "crm_resumen_estadisticas", "args": {}, "user_text": text}
 
     # ── Qontrol reportes (sin Excel) ──────────────────────────────────────────
@@ -967,7 +1269,14 @@ def run_sync_tool(
     except Exception as error:
         host_hint = ""
         if tool.startswith("crm_"):
-            host_hint = " Revisa CRM_HOST/CRM_PORT en backend/.env o la VPN al servidor CRM."
+            from tools.crm_db import crm_error_hint, get_crm_connection_info
+
+            info = get_crm_connection_info()
+            host_hint = (
+                f"\n\n**Diagnóstico CRM:** `{info['host']}:{info['port']}/{info['db']}` "
+                f"(usuario `{info['user']}`, fuente: {info['source']}).\n"
+                f"{crm_error_hint(error)}"
+            )
         return {
             "message": f"No pude ejecutar **{tool}**: {error}.{host_hint}",
             "model_used": "tool",

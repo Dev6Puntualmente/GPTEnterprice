@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,6 @@ from openai import APIConnectionError, AuthenticationError, BadRequestError, Not
 from pydantic import BaseModel
 
 from config import settings
-from services.agent import run_agent
 from tools.registry import TOOL_CATALOG, TOOL_HANDLERS
 
 logging.basicConfig(level=logging.INFO)
@@ -73,8 +73,21 @@ def _tool_names(payload: ChatRequest) -> list[str]:
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "version": "agent-v2-no-loop"}
+def health() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "version": "agent-v3-llm-tools",
+        "sync_tools": settings.use_sync_tools,
+        "vllm_tools": settings.vllm_tools_enabled,
+        "vllm_native_tools": settings.vllm_native_tools,
+    }
+
+
+@app.get("/health/crm")
+def health_crm():
+    from tools.crm_db import test_crm_connection
+
+    return test_crm_connection()
 
 
 @app.get("/tools")
@@ -110,19 +123,24 @@ def enqueue_job(payload: EnqueueJobRequest):
 
 
 @app.post("/chat")
-def chat(payload: ChatRequest):
+async def chat(payload: ChatRequest):
     if not payload.messages:
         raise HTTPException(status_code=400, detail="messages no puede estar vacío")
 
+    from services.chat_context import trim_messages_for_agent
+
+    payload.messages = trim_messages_for_agent(payload.messages, per_role=3)
+
     logger.info(
-        "chat request: %s mensajes, vllm=%s",
+        "chat request: %s mensajes, vllm=%s, sync_tools=%s, vllm_tools=%s",
         len(payload.messages),
         payload.vllm.model if payload.vllm else settings.vllm_model,
+        settings.use_sync_tools,
+        settings.vllm_tools_enabled,
     )
 
     from services.intent import detect_heavy_tool_intent
     from services.stream_policy import resolve_effective_stream
-    from services.sync_tools import detect_sync_tool_intent, run_sync_tool
     from workers.job_runner import enqueue_tool_job
 
     tool_names = _tool_names(payload)
@@ -132,61 +150,117 @@ def chat(payload: ChatRequest):
         tool_names,
     )
     if payload.stream and not effective_stream:
-        logger.info("stream desactivado: se usarán tools nativas de vLLM")
-
-    sync_intent = detect_sync_tool_intent(payload.messages, tool_names)
-    if sync_intent:
-        kind = sync_intent.get("type") or sync_intent.get("tool")
-        logger.info("sync intent detectado: %s", kind)
-        result = run_sync_tool(sync_intent, payload.messages)
-        if payload.stream:
-            import json as json_lib
-
-            def sync_stream():
-                payload_done = {
-                    "type": "done",
-                    "model_used": "tool",
-                    "message": result["message"],
-                    "tool_calls": result.get("tool_calls"),
-                    "files": result.get("files"),
-                }
-                yield f"data: {json_lib.dumps({'type': 'token', 'content': result['message']}, ensure_ascii=False)}\n\n"
-                yield f"data: {json_lib.dumps(payload_done, ensure_ascii=False)}\n\n"
-
-            return StreamingResponse(sync_stream(), media_type="text/event-stream")
-        return ChatResponse(**result)
-
-    intent = detect_heavy_tool_intent(payload.messages, tool_names)
-    if intent:
-        logger.info("intent detectado en FastAPI: %s %s", intent["tool"], intent["args"])
-        job = enqueue_tool_job(intent["tool"], intent["label"], intent["args"])
-        start = intent["args"].get("fecha_inicio") or intent["args"].get("hora_inicio")
-        end = intent["args"].get("fecha_fin") or intent["args"].get("hora_fin")
-        message = (
-            f"Perfecto, estoy generando {intent['label']} "
-            f"para el periodo {start} → {end}. "
-            "Puedes seguir el progreso aquí; te avisaré cuando el Excel esté listo."
-        )
-        model = payload.vllm.model if payload.vllm else settings.vllm_model
-        return ChatResponse(
-            message=message,
-            model_used=model,
-            pending_job={
-                "id": job["id"],
-                "tool": job["tool"],
-                "label": job["label"],
-                "status": job["status"],
-                "progress": job["progress"],
-                "stage": job["stage"],
-            },
+        last_user = ""
+        for message in reversed(payload.messages):
+            if str(message.get("role", "")).lower() == "user":
+                last_user = str(message.get("content", ""))[:100]
+                break
+        logger.info(
+            "modo LLM+tools: el modelo elegirá y ejecutará herramientas (último=%r, tools=%d)",
+            last_user,
+            len(tool_names),
         )
 
-    # Sync/heavy ya se resolvieron. Stream solo para chat LLM sin tools nativas.
-    if effective_stream:
-        from services.stream_agent import stream_sse_events
+    if settings.use_sync_tools and tool_names:
+        from services.sync_tools import detect_sync_tool_intent, run_sync_tool
+
+        sync_intent = detect_sync_tool_intent(payload.messages, tool_names)
+        if sync_intent:
+            kind = sync_intent.get("type") or sync_intent.get("tool")
+            logger.info("sync intent detectado: %s args=%s", kind, sync_intent.get("args"))
+
+            if payload.stream:
+                import json as json_lib
+
+                async def sync_stream_async():
+                    yield f"data: {json_lib.dumps({'type': 'status', 'content': 'Consultando datos...'}, ensure_ascii=False)}\n\n"
+                    try:
+                        result = await asyncio.to_thread(
+                            run_sync_tool,
+                            sync_intent,
+                            payload.messages,
+                        )
+                    except Exception as error:
+                        logger.exception("sync tool falló: %s", kind)
+                        yield f"data: {json_lib.dumps({'type': 'error', 'message': f'Error ejecutando {kind}: {error}'}, ensure_ascii=False)}\n\n"
+                        return
+
+                    payload_done = {
+                        "type": "done",
+                        "model_used": "tool",
+                        "message": result["message"],
+                        "tool_calls": result.get("tool_calls"),
+                        "files": result.get("files"),
+                    }
+                    yield f"data: {json_lib.dumps({'type': 'token', 'content': result['message']}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json_lib.dumps(payload_done, ensure_ascii=False)}\n\n"
+
+                return StreamingResponse(
+                    sync_stream_async(),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                )
+
+            try:
+                result = await asyncio.to_thread(run_sync_tool, sync_intent, payload.messages)
+            except Exception as error:
+                logger.exception("sync tool falló: %s", kind)
+                return JSONResponse(
+                    status_code=502,
+                    content={"detail": f"Error ejecutando herramienta {kind}: {error}"},
+                )
+            return ChatResponse(**result)
+
+    if settings.use_sync_tools:
+        intent = detect_heavy_tool_intent(payload.messages, tool_names)
+        if intent:
+            logger.info("intent detectado en FastAPI: %s %s", intent["tool"], intent["args"])
+            job = enqueue_tool_job(intent["tool"], intent["label"], intent["args"])
+            start = intent["args"].get("fecha_inicio") or intent["args"].get("hora_inicio")
+            end = intent["args"].get("fecha_fin") or intent["args"].get("hora_fin")
+            message = (
+                f"Perfecto, estoy generando {intent['label']} "
+                f"para el periodo {start} → {end}. "
+                "Puedes seguir el progreso aquí; te avisaré cuando el Excel esté listo."
+            )
+            model = payload.vllm.model if payload.vllm else settings.vllm_model
+            return ChatResponse(
+                message=message,
+                model_used=model,
+                pending_job={
+                    "id": job["id"],
+                    "tool": job["tool"],
+                    "label": job["label"],
+                    "status": job["status"],
+                    "progress": job["progress"],
+                    "stage": job["stage"],
+                },
+            )
+
+    use_native_tools = settings.vllm_tools_enabled and bool(payload.tools)
+    vllm_payload = payload.vllm.model_dump() if payload.vllm else None
+
+    # LLM + tools: stream la respuesta final tras el loop de herramientas.
+    if payload.stream and not effective_stream and use_native_tools:
+        from services.stream_agent import stream_sse_from_agent_async
 
         return StreamingResponse(
-            stream_sse_events(
+            stream_sse_from_agent_async(
+                payload.messages,
+                payload.system_prompt,
+                payload.tools,
+                tool_names,
+                vllm_payload,
+            ),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    if effective_stream:
+        from services.stream_agent import stream_sse_events_async
+
+        return StreamingResponse(
+            stream_sse_events_async(
                 payload.messages,
                 payload.system_prompt,
                 payload.vllm.model_dump() if payload.vllm else None,
@@ -195,15 +269,17 @@ def chat(payload: ChatRequest):
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    # Sin stream: loop nativo de tools en vLLM solo si está habilitado.
-    use_native_tools = settings.vllm_tools_enabled and bool(payload.tools)
-
+    # Sin stream: loop nativo de tools en vLLM.
     try:
-        result = run_agent(
-            messages=payload.messages,
-            system_prompt=payload.system_prompt,
-            tools=payload.tools if use_native_tools else None,
-            vllm=payload.vllm.model_dump() if payload.vllm else None,
+        from services.tool_orchestration import run_chat_with_tools
+
+        result = await asyncio.to_thread(
+            run_chat_with_tools,
+            payload.messages,
+            payload.system_prompt,
+            payload.tools if use_native_tools else None,
+            tool_names,
+            vllm_payload,
         )
         return ChatResponse(**result)
     except BadRequestError as error:
@@ -234,6 +310,18 @@ def chat(payload: ChatRequest):
         return JSONResponse(
             status_code=502,
             content={"detail": f"No se pudo conectar al servidor LLM: {error}"},
+        )
+    except InternalServerError as error:
+        logger.exception("vLLM internal error")
+        return JSONResponse(
+            status_code=502,
+            content={
+                "detail": (
+                    f"Error interno del servidor LLM: {error}. "
+                    "Si usas tools, configura vLLM con "
+                    "--enable-auto-tool-choice --tool-call-parser harmony"
+                ),
+            },
         )
     except Exception as error:
         logger.exception("chat failed")

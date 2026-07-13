@@ -4,11 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { ChatMessageBubble } from "@/app/components/chat/ChatMessageBubble";
 import GlassButton from "@/app/components/ui/GlassButton";
-import GlassCard from "@/app/components/ui/GlassCard";
+import ParticleField from "@/app/components/ui/ParticleField";
 import { useTheme } from "@/app/components/theme/ThemeProvider";
 import type { BackgroundJob, MessageMetadata } from "@/lib/types";
-
-const STREAMING_STORAGE_KEY = "gptenterprice-streaming";
 
 function looksLikeToolRequest(text: string): boolean {
   return /busca(?:r|a)|gesti[oó]n|crm\b|llamad|reporte|estad[ií]stica|poster|dashboard|tipific|flujo/i.test(
@@ -55,7 +53,7 @@ export function ChatWindow({
   projectId,
   onConversationCreated,
 }: ChatWindowProps) {
-  const { colors } = useTheme();
+  const { colors, mode } = useTheme();
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -63,8 +61,6 @@ export function ChatWindow({
   const [streamingContent, setStreamingContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [jobStates, setJobStates] = useState<Record<string, JobRuntimeState>>({});
-  const [streamingEnabled, setStreamingEnabled] = useState(true);
-  const [streamHint, setStreamHint] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pollingRef = useRef<Record<string, ReturnType<typeof setInterval>>>({});
   const conversationIdRef = useRef(conversationId);
@@ -159,7 +155,7 @@ export function ChatWindow({
             if (convId) await refreshConversation(convId);
           }
         } catch {
-          // siguiente tick reintenta
+          // siguiente tick
         }
       };
 
@@ -179,7 +175,6 @@ export function ChatWindow({
 
   useEffect(() => {
     if (!conversation) return;
-
     for (const message of conversation.messages) {
       const jobId = message.metadata?.pending_job?.id;
       const terminal =
@@ -191,15 +186,6 @@ export function ChatWindow({
       }
     }
   }, [conversation, pollJob]);
-
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STREAMING_STORAGE_KEY);
-      if (stored !== null) setStreamingEnabled(stored === "true");
-    } catch {
-      // ignore
-    }
-  }, []);
 
   useEffect(() => {
     return () => {
@@ -217,6 +203,31 @@ export function ChatWindow({
     container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
   }, [conversation?.messages, loading, jobStates, streamingContent]);
 
+  async function sendChatRequest(userText: string, attempt = 0): Promise<Response> {
+    const response = await fetch("/api/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        conversationId: conversationId ?? undefined,
+        projectId,
+        message: userText,
+        stream: true,
+      }),
+    });
+
+    if (!response.ok && attempt < 1) {
+      const data = await response.json().catch(() => null);
+      const detail = String(data?.detail ?? data?.error ?? "");
+      if (/fetch failed|ECONNREFUSED|contactar FastAPI|502/i.test(detail)) {
+        setLoadingLabel("Reconectando con el agente...");
+        await new Promise((resolve) => setTimeout(resolve, 900));
+        return sendChatRequest(userText, attempt + 1);
+      }
+    }
+
+    return response;
+  }
+
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     if (!input.trim() || isBusy) return;
@@ -225,7 +236,6 @@ export function ChatWindow({
     setInput("");
     setLoading(true);
     setLoadingLabel(looksLikeToolRequest(userText) ? "Consultando datos..." : "Pensando...");
-    setStreamHint(null);
     setError(null);
 
     const optimisticMessage: Message = {
@@ -246,25 +256,13 @@ export function ChatWindow({
     );
 
     try {
-      const response = await fetch("/api/chat/stream", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          conversationId: conversationId ?? undefined,
-          projectId,
-          message: userText,
-          stream: true,
-        }),
-      });
+      const response = await sendChatRequest(userText);
 
       const contentType = response.headers.get("content-type") ?? "";
 
       if (contentType.includes("text/event-stream") && response.body) {
-        const animateTokens = streamingEnabled;
-        if (animateTokens) {
-          setLoading(false);
-          setStreamingContent("");
-        }
+        setLoading(false);
+        setStreamingContent("");
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -289,14 +287,14 @@ export function ChatWindow({
                 type: string;
                 content?: string;
                 conversationId?: string;
-                message?: any;
+                message?: { id?: string };
                 pendingJob?: BackgroundJob | null;
               };
 
               if (event.type === "token" && event.content) {
-                if (animateTokens) {
-                  setStreamingContent((current) => (current ?? "") + event.content);
-                }
+                setStreamingContent((current) => (current ?? "") + event.content);
+              } else if (event.type === "status" && event.content) {
+                setLoadingLabel(event.content);
               } else if (event.type === "error" && event.message) {
                 throw new Error(String(event.message));
               } else if (event.type === "done") {
@@ -304,8 +302,10 @@ export function ChatWindow({
                 assistantMessageId = event.message?.id ?? null;
                 pendingJob = event.pendingJob ?? null;
               }
-            } catch {
-              // ignorar fragmentos SSE incompletos
+            } catch (parseError) {
+              if (parseError instanceof Error && parseError.message !== "Unexpected end of JSON input") {
+                throw parseError;
+              }
             }
           }
         }
@@ -336,25 +336,15 @@ export function ChatWindow({
           const target = data?.chatUrl ?? data?.agentApiUrl;
           const message = data?.detail
             ? `${data.error ?? "Error al enviar mensaje"}: ${data.detail}${target ? ` (${target})` : ""}`
-            : data?.error ?? `Error HTTP ${response.status}${target ? ` (${target})` : ""}`;
+            : data?.error ?? `Error HTTP ${response.status}`;
           throw new Error(message);
         }
 
         if (!conversationId) onConversationCreated(data.conversationId);
-
         await refreshConversation(data.conversationId);
 
         if (data.pendingJob?.id && data.message?.id) {
-          setLoadingLabel("Generando archivo...");
           pollJob(data.pendingJob.id, data.message.id);
-          setJobStates((current) => ({
-            ...current,
-            [data.pendingJob.id]: {
-              status: data.pendingJob.status,
-              progress: data.pendingJob.progress ?? 8,
-              stage: data.pendingJob.stage ?? "En cola...",
-            },
-          }));
         }
       }
     } catch (submitError) {
@@ -362,82 +352,86 @@ export function ChatWindow({
     } finally {
       setLoading(false);
       setLoadingLabel("Pensando...");
-      setStreamHint(null);
     }
   }
 
   return (
-    <GlassCard className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div
-        className="shrink-0 border-b px-5 py-4 backdrop-blur-xl"
-        style={{ borderColor: colors.border, background: "rgba(255,255,255,0.03)" }}
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35 }}
+      className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border"
+      style={{
+        background: mode === "light" ? "rgba(255,255,255,0.72)" : colors.panel,
+        borderColor: colors.border,
+        boxShadow: colors.shadowLg ?? colors.shadow,
+        backdropFilter: mode === "light" ? "blur(12px)" : undefined,
+      }}
+    >
+      {/* Header */}
+      <header
+        className="relative flex shrink-0 items-center justify-between gap-3 overflow-hidden border-b px-4 py-3 sm:px-5"
+        style={{ borderColor: colors.border, background: colors.surfaceMuted }}
       >
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-[10px] uppercase tracking-[0.24em]" style={{ color: colors.textMuted }}>
-              Conversación
-            </p>
-            <h2 className="text-lg font-semibold tracking-tight" style={{ color: colors.text }}>
-              {conversation?.project.name ?? "Chat"}
-            </h2>
-          </div>
-          <div className="flex items-center gap-2">
-            <label
-              className="flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1 text-[11px]"
-              style={{ borderColor: colors.border, color: colors.textSoft }}
-              title="Híbrido automático: chat con streaming y tools sin cambiar este interruptor."
-            >
-              <input
-                type="checkbox"
-                checked={streamingEnabled}
-                onChange={(e) => {
-                  const next = e.target.checked;
-                  setStreamingEnabled(next);
-                  try {
-                    localStorage.setItem(STREAMING_STORAGE_KEY, String(next));
-                  } catch {
-                    // ignore
-                  }
-                }}
-                className="accent-violet-500"
-              />
-              Animación
-            </label>
-            <div
-              className="rounded-full px-3 py-1 text-[11px] font-medium"
-              style={{ background: colors.accentSoft, color: colors.accent }}
-            >
-              {conversation?.project.tools.length ?? 0} tools
-            </div>
-          </div>
+        <motion.div
+          className="pointer-events-none absolute inset-0 opacity-40"
+          style={{
+            background: `linear-gradient(90deg, transparent, ${colors.accentSoft}, transparent)`,
+          }}
+          animate={{ x: ["-100%", "100%"] }}
+          transition={{ duration: 5, repeat: Infinity, ease: "linear" }}
+        />
+        <div className="relative">
+          <h2 className="text-base font-semibold tracking-tight" style={{ color: colors.text }}>
+            {conversation?.project.name ?? "Nueva conversación"}
+          </h2>
+          <p className="flex items-center gap-1.5 text-xs" style={{ color: colors.textMuted }}>
+            <motion.span
+              className="inline-block h-1.5 w-1.5 rounded-full"
+              style={{ background: colors.success }}
+              animate={{ scale: [1, 1.35, 1], opacity: [0.7, 1, 0.7] }}
+              transition={{ duration: 2, repeat: Infinity }}
+            />
+            {conversation?.project.tools.length ?? 0} herramientas · agente IA decide
+          </p>
         </div>
-      </div>
+      </header>
 
+      {/* Messages */}
       <div
         ref={scrollRef}
-        className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 py-5 md:px-5"
+        className="relative min-h-0 min-w-0 flex-1 space-y-3 overflow-x-hidden overflow-y-auto overscroll-contain px-3 py-4 sm:px-5"
+        style={{ background: mode === "light" ? "transparent" : "transparent" }}
       >
+        <ParticleField density={28} />
         {!conversationId && visibleMessages.length === 0 ? (
           <motion.div
-            initial={{ opacity: 0, y: 10 }}
+            initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
-            className="rounded-3xl border border-dashed p-8 text-center backdrop-blur-md"
-            style={{ borderColor: colors.border, color: colors.textSoft, background: "rgba(255,255,255,0.03)" }}
+            transition={{ delay: 0.1 }}
+            className="relative mx-auto max-w-md rounded-xl border border-dashed p-8 text-center"
+            style={{
+              borderColor: colors.borderStrong,
+              background: colors.surface,
+              color: colors.textSoft,
+            }}
           >
-            <p className="text-sm">Prueba pedir un Excel de llamadas con fechas, por ejemplo:</p>
-            <p className="mt-2 text-xs opacity-80">
-              &quot;Dame todas las llamadas del 9 al 12 de julio de 2026 en Excel&quot;
+            <p className="text-sm font-medium" style={{ color: colors.text }}>
+              ¿En qué te ayudo?
+            </p>
+            <p className="mt-2 text-xs leading-relaxed">
+              Prueba: &quot;Busca el cliente con cédula 1140915961&quot; o &quot;Dashboard WhatsApp de esta semana&quot;
             </p>
           </motion.div>
         ) : null}
 
-        {visibleMessages.map((message) => {
+        {visibleMessages.map((message, index) => {
           const jobId = message.metadata?.pending_job?.id;
           const runtime = jobId ? jobStates[jobId] : undefined;
-
           return (
             <ChatMessageBubble
               key={message.id}
+              index={index}
               role={message.role === "USER" ? "USER" : "ASSISTANT"}
               content={message.content}
               metadata={message.metadata}
@@ -461,18 +455,37 @@ export function ChatWindow({
         ) : null}
 
         {loading ? (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex justify-start">
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="relative flex justify-start"
+          >
             <div
-              className="rounded-3xl rounded-bl-lg px-4 py-3 text-sm backdrop-blur-xl"
+              className="flex items-center gap-2 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm"
               style={{
-                background: "rgba(255,255,255,0.06)",
-                color: colors.textSoft,
+                background: colors.surface,
+                color: colors.textMuted,
                 border: `1px solid ${colors.border}`,
+                boxShadow: mode === "light" ? "0 4px 16px rgba(15,23,42,0.05)" : undefined,
               }}
             >
               <motion.span
-                animate={{ opacity: [0.35, 1, 0.35] }}
-                transition={{ duration: 1.2, repeat: Infinity }}
+                className="flex gap-1"
+                aria-hidden
+              >
+                {[0, 1, 2].map((dot) => (
+                  <motion.span
+                    key={dot}
+                    className="inline-block h-1.5 w-1.5 rounded-full"
+                    style={{ background: colors.accent }}
+                    animate={{ y: [0, -4, 0], opacity: [0.4, 1, 0.4] }}
+                    transition={{ duration: 0.9, repeat: Infinity, delay: dot * 0.15 }}
+                  />
+                ))}
+              </motion.span>
+              <motion.span
+                animate={{ opacity: [0.5, 1, 0.5] }}
+                transition={{ duration: 1.4, repeat: Infinity }}
               >
                 {loadingLabel}
               </motion.span>
@@ -481,48 +494,45 @@ export function ChatWindow({
         ) : null}
       </div>
 
-      {streamHint ? (
-        <div
-          className="mx-4 mb-2 rounded-2xl px-3 py-2 text-xs backdrop-blur-md md:mx-5"
-          style={{ color: colors.textSoft, background: `${colors.accent}12`, border: `1px solid ${colors.border}` }}
-        >
-          {streamHint}
-        </div>
-      ) : null}
-
       {error ? (
         <div
-          className="mx-4 mb-2 rounded-2xl px-3 py-2 text-sm backdrop-blur-md md:mx-5"
-          style={{ color: colors.danger, background: `${colors.danger}12`, border: `1px solid ${colors.danger}33` }}
+          className="mx-3 mb-2 rounded-lg px-3 py-2 text-sm sm:mx-5"
+          style={{
+            color: colors.danger,
+            background: `${colors.danger}10`,
+            border: `1px solid ${colors.danger}25`,
+          }}
         >
           {error}
         </div>
       ) : null}
 
+      {/* Input */}
       <form
         onSubmit={handleSubmit}
-        className="shrink-0 border-t p-4 backdrop-blur-xl md:p-5"
-        style={{ borderColor: colors.border, background: "rgba(255,255,255,0.03)" }}
+        className="shrink-0 border-t p-3 sm:p-4"
+        style={{ borderColor: colors.border, background: colors.panel }}
       >
-        <div className="flex gap-3">
+        <div className="flex gap-2">
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Escribe tu mensaje..."
             disabled={isBusy}
-            className="flex-1 rounded-2xl border px-4 py-3 text-sm outline-none backdrop-blur-md transition focus:ring-2"
+            className="min-w-0 flex-1 rounded-xl border px-4 py-2.5 text-sm outline-none transition focus:ring-2"
             style={{
-              borderColor: colors.border,
-              background: "rgba(255,255,255,0.05)",
+              borderColor: colors.borderStrong,
+              background: colors.input,
               color: colors.text,
-              boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05)",
+              boxShadow: mode === "light" ? "inset 0 1px 2px rgba(15,23,42,0.04)" : "none",
             }}
           />
-          <GlassButton type="submit" disabled={isBusy || !input.trim()} className="px-5">
-            Enviar
+          <GlassButton type="submit" disabled={isBusy || !input.trim()} className="shrink-0 px-5">
+            <span className="hidden sm:inline">Enviar</span>
+            <span className="sm:hidden">→</span>
           </GlassButton>
         </div>
       </form>
-    </GlassCard>
+    </motion.div>
   );
 }
