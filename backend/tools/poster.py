@@ -1,6 +1,6 @@
 """
 Generación de posters/comunicados visuales en PNG (Pillow).
-Qwen rellena estructura y estilo vía tool-calling; este módulo renderiza la plantilla.
+Layout medido + contraste automático para que el texto siempre sea legible.
 """
 from __future__ import annotations
 
@@ -77,22 +77,37 @@ SECTION_ICON_LABELS = {
     "grafico_barras": "G",
     "usuario": "U",
     "alerta": "!",
-    "agua": "A",
+    "agua": "H2O",
     "info": "i",
     "exito": "+",
 }
 
-FONT_CANDIDATES = (
+
+def _draw_section_icon(
+    draw: ImageDraw.ImageDraw,
+    *,
+    x: int,
+    y: int,
+    radius: int,
+    label: str,
+    accent: tuple[int, int, int],
+    font: ImageFont.ImageFont,
+) -> None:
+    draw.ellipse([(x - radius, y - radius), (x + radius, y + radius)], fill=accent)
+    text = label[:3]
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    draw.text((x - tw // 2, y - th // 2 - 1), text, font=font, fill=(255, 255, 255))
+
+FONT_BOLD = (
     Path("C:/Windows/Fonts/segoeuib.ttf"),
     Path("C:/Windows/Fonts/arialbd.ttf"),
+)
+FONT_REGULAR = (
     Path("C:/Windows/Fonts/segoeui.ttf"),
     Path("C:/Windows/Fonts/arial.ttf"),
 )
-FONT_REGULAR_CANDIDATES = (
-    Path("C:/Windows/Fonts/segoeui.ttf"),
-    Path("C:/Windows/Fonts/arial.ttf"),
-)
-FONT_MONO_CANDIDATES = (
+FONT_MONO = (
     Path("C:/Windows/Fonts/consola.ttf"),
     Path("C:/Windows/Fonts/cour.ttf"),
 )
@@ -115,6 +130,24 @@ def _hex_color(value: str | None, fallback: str) -> tuple[int, int, int]:
     return int(raw[1:3], 16), int(raw[3:5], 16), int(raw[5:7], 16)
 
 
+def _luminance(rgb: tuple[int, int, int]) -> float:
+    r, g, b = (channel / 255.0 for channel in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _blend(a: tuple[int, int, int], b: tuple[int, int, int], ratio: float) -> tuple[int, int, int]:
+    ratio = max(0.0, min(1.0, ratio))
+    return tuple(int(a[i] * (1 - ratio) + b[i] * ratio) for i in range(3))
+
+
+def _pick_text_on(bg: tuple[int, int, int], preferred: tuple[int, int, int], fallback_light: tuple[int, int, int], fallback_dark: tuple[int, int, int]) -> tuple[int, int, int]:
+    if _luminance(preferred) > 0.55 and _luminance(bg) > 0.45:
+        return fallback_dark
+    if _luminance(preferred) < 0.45 and _luminance(bg) < 0.35:
+        return fallback_light
+    return preferred
+
+
 def _load_font(candidates: tuple[Path, ...], size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     for path in candidates:
         if path.exists():
@@ -134,8 +167,7 @@ def _wrap_text(text: str, font: ImageFont.ImageFont, max_width: int, max_lines: 
     for word in words:
         candidate = f"{current} {word}".strip()
         bbox = font.getbbox(candidate)
-        width = bbox[2] - bbox[0]
-        if width <= max_width or not current:
+        if (bbox[2] - bbox[0]) <= max_width or not current:
             current = candidate
         else:
             lines.append(current)
@@ -158,6 +190,19 @@ def _vertical_gradient(size: tuple[int, int], top: tuple[int, int, int], bottom:
     return image
 
 
+def _draw_glow_circles(draw: ImageDraw.ImageDraw, width: int, height: int, accent: tuple[int, int, int]) -> None:
+    specs = [
+        (int(width * 0.12), int(height * 0.08), int(width * 0.22)),
+        (int(width * 0.88), int(height * 0.18), int(width * 0.16)),
+        (int(width * 0.78), int(height * 0.82), int(width * 0.28)),
+    ]
+    for cx, cy, radius in specs:
+        draw.ellipse(
+            [(cx - radius, cy - radius), (cx + radius, cy + radius)],
+            fill=_blend(accent, (0, 0, 0), 0.88),
+        )
+
+
 def _resolve_theme_key(tema: str | None, color_esquema: str | None) -> str:
     if color_esquema:
         mapped = COLOR_SCHEME_TO_THEME.get(color_esquema.strip().lower())
@@ -166,9 +211,104 @@ def _resolve_theme_key(tema: str | None, color_esquema: str | None) -> str:
     theme_key = (tema or "alerta").lower().strip()
     if theme_key in COLOR_SCHEME_TO_THEME:
         return COLOR_SCHEME_TO_THEME[theme_key]
-    if theme_key not in THEMES:
-        return "alerta"
-    return theme_key
+    return theme_key if theme_key in THEMES else "alerta"
+
+
+def _normalize_sections(
+    secciones: list[dict[str, Any]] | None,
+    secciones_informativas: list[dict[str, Any]] | None,
+    mensaje: str | None,
+) -> list[dict[str, str]]:
+    raw = secciones_informativas or secciones or []
+    normalized: list[dict[str, str]] = []
+    for item in raw[:4]:
+        if not isinstance(item, dict):
+            continue
+        subtitulo = item.get("subtitulo") or item.get("titulo_seccion") or item.get("title") or ""
+        contenido = (
+            item.get("contenido_texto")
+            or item.get("contenido")
+            or item.get("texto")
+            or item.get("mensaje")
+            or ""
+        )
+        if not str(subtitulo).strip() and not str(contenido).strip():
+            continue
+        icon_key = str(item.get("icono_svg_sugerido") or item.get("icono") or "").lower()
+        normalized.append(
+            {
+                "subtitulo": str(subtitulo).strip() or "Detalle",
+                "contenido": str(contenido).strip(),
+                "icono": SECTION_ICON_LABELS.get(icon_key, "•"),
+            }
+        )
+    if not normalized and mensaje and mensaje.strip():
+        normalized.append({"subtitulo": "Mensaje", "contenido": mensaje.strip(), "icono": "•"})
+    return normalized
+
+
+def _measure_section_height(
+    section: dict[str, str],
+    *,
+    inner_w: int,
+    body_font: ImageFont.ImageFont,
+    heading_font: ImageFont.ImageFont,
+    scale: float,
+) -> int:
+    content_lines = _wrap_text(section["contenido"], body_font, inner_w - int(56 * scale), 4)
+    base = int(72 * scale)
+    return base + max(0, len(content_lines) - 1) * int(24 * scale)
+
+
+def _compute_layout(
+    *,
+    width: int,
+    margin: int,
+    title: str,
+    sections: list[dict[str, str]],
+    subtitulo: str | None,
+    title_size: int,
+    body_size: int,
+    subtitle_size: int,
+    requested_height: int | None,
+) -> dict[str, Any]:
+    scale = width / 600
+    title_font = _load_font(FONT_BOLD, title_size)
+    body_font = _load_font(FONT_REGULAR, body_size)
+    heading_font = _load_font(FONT_BOLD, subtitle_size)
+    card_w = width - margin * 2
+    inner_w = card_w - int(32 * scale)
+
+    title_lines = _wrap_text(title.upper(), title_font, card_w - int(40 * scale), 3)
+    title_block = int(28 * scale) + len(title_lines) * int(title_size * 1.15)
+    subtitle_block = int(subtitle_size * 1.8) if subtitulo else 0
+    header_block = int(118 * scale) + title_block + subtitle_block
+
+    section_heights = [
+        _measure_section_height(section, inner_w=inner_w, body_font=body_font, heading_font=heading_font, scale=scale)
+        for section in sections
+    ]
+    gap = int(14 * scale)
+    sections_block = sum(section_heights) + gap * max(0, len(sections) - 1) + int(24 * scale)
+    footer_block = int(72 * scale)
+    needed = header_block + sections_block + footer_block + margin
+
+    if requested_height is None or requested_height < needed:
+        height = min(2400, max(needed, int(640 * scale)))
+    else:
+        height = min(2400, requested_height)
+
+    return {
+        "height": height,
+        "title_lines": title_lines,
+        "section_heights": section_heights,
+        "scale": scale,
+        "title_font": title_font,
+        "body_font": body_font,
+        "heading_font": heading_font,
+        "card_w": card_w,
+        "inner_w": inner_w,
+    }
 
 
 def _build_style(
@@ -189,125 +329,72 @@ def _build_style(
     tamano_fuente_subtitulo: Any | None = None,
     tamano_fuente_pie: Any | None = None,
     badge_texto: str | None = None,
-    num_secciones: int = 1,
+    title: str = "",
+    sections: list[dict[str, str]] | None = None,
+    subtitulo: str | None = None,
 ) -> dict[str, Any]:
     theme_key = _resolve_theme_key(tema, color_esquema)
     preset = THEMES[theme_key]
-
     width = _parse_int(ancho, 600, minimum=400, maximum=1400)
     scale = width / 600
-    margin = _parse_int(margen, int(36 * scale), minimum=16, maximum=120)
-    base_height = int(820 * scale)
-    extra_height = max(0, num_secciones - 1) * int(110 * scale)
-    auto_height = base_height + extra_height
-    height = _parse_int(alto, auto_height, minimum=500, maximum=2200) if alto is not None else auto_height
+    margin = _parse_int(margen, int(36 * scale), minimum=20, maximum=120)
 
-    title_size = _parse_int(
-        tamano_fuente_titulo,
-        int(38 * scale),
-        minimum=18,
-        maximum=96,
+    title_size = _parse_int(tamano_fuente_titulo, int(42 * scale), minimum=22, maximum=96)
+    if title_size < int(34 * scale) and width >= 640:
+        title_size = int(40 * scale)
+    body_size = _parse_int(tamano_fuente_cuerpo, int(16 * scale), minimum=12, maximum=40)
+    subtitle_size = _parse_int(tamano_fuente_subtitulo, int(18 * scale), minimum=13, maximum=40)
+    footer_size = _parse_int(tamano_fuente_pie, int(12 * scale), minimum=10, maximum=24)
+
+    requested_height = _parse_int(alto, 0, minimum=0, maximum=2400) if alto is not None else None
+    if requested_height == 0:
+        requested_height = None
+
+    layout = _compute_layout(
+        width=width,
+        margin=margin,
+        title=title,
+        sections=sections or [],
+        subtitulo=subtitulo,
+        title_size=title_size,
+        body_size=body_size,
+        subtitle_size=subtitle_size,
+        requested_height=requested_height,
     )
-    body_size = _parse_int(
-        tamano_fuente_cuerpo,
-        int(15 * scale),
-        minimum=11,
-        maximum=48,
-    )
-    subtitle_size = _parse_int(
-        tamano_fuente_subtitulo,
-        int(16 * scale),
-        minimum=11,
-        maximum=48,
-    )
-    footer_size = _parse_int(
-        tamano_fuente_pie,
-        int(13 * scale),
-        minimum=9,
-        maximum=32,
-    )
+
+    bg = _hex_color(color_fondo, preset["bg"])
+    bg2 = _hex_color(color_fondo_secundario or color_fondo, preset["bg2"])
+    accent = _hex_color(color_acento, preset["accent"])
+    text = _hex_color(color_texto, preset["text"])
+    subtext = _hex_color(color_texto_secundario or color_texto, preset["subtext"])
+    section_bg = _blend(accent, bg, 0.82)
+    section_heading = _pick_text_on(section_bg, accent, (255, 255, 255), (20, 30, 20))
+    section_body = _pick_text_on(section_bg, subtext, (240, 250, 240), (30, 45, 30))
+    title_color = _pick_text_on(bg, text, (255, 255, 255), (15, 25, 15))
+    subtitle_color = _pick_text_on(bg, _hex_color(color_badge, preset["accent_soft"]), (255, 255, 255), (40, 60, 40))
 
     return {
         "theme_key": theme_key,
         "width": width,
-        "height": height,
+        "height": layout["height"],
         "margin": margin,
         "title_size": title_size,
         "body_size": body_size,
         "subtitle_size": subtitle_size,
         "footer_size": footer_size,
-        "bg": _hex_color(color_fondo, preset["bg"]),
-        "bg2": _hex_color(color_fondo_secundario or color_fondo, preset["bg2"]),
-        "text": _hex_color(color_texto, preset["text"]),
-        "subtext": _hex_color(color_texto_secundario or color_texto, preset["subtext"]),
-        "accent": _hex_color(color_acento, preset["accent"]),
-        "accent_soft": _hex_color(color_badge or color_acento, preset["accent_soft"]),
+        "bg": bg,
+        "bg2": bg2,
+        "text": title_color,
+        "subtext": subtitle_color,
+        "accent": accent,
+        "accent_soft": _hex_color(color_badge, preset["accent_soft"]),
+        "section_bg": section_bg,
+        "section_heading": section_heading,
+        "section_body": section_body,
         "badge": (badge_texto or preset["badge"]).upper()[:24],
+        "layout": layout,
+        "alto_ajustado": requested_height is not None and requested_height < layout["height"],
     }
-
-
-def _normalize_sections(
-    secciones: list[dict[str, Any]] | None,
-    secciones_informativas: list[dict[str, Any]] | None,
-    mensaje: str | None,
-) -> list[dict[str, str]]:
-    raw = secciones_informativas or secciones or []
-    normalized: list[dict[str, str]] = []
-    for item in raw[:3]:
-        if not isinstance(item, dict):
-            continue
-        subtitulo = (
-            item.get("subtitulo")
-            or item.get("titulo_seccion")
-            or item.get("title")
-            or ""
-        )
-        contenido = (
-            item.get("contenido_texto")
-            or item.get("contenido")
-            or item.get("texto")
-            or item.get("mensaje")
-            or ""
-        )
-        if not str(subtitulo).strip() and not str(contenido).strip():
-            continue
-        icon_key = str(item.get("icono_svg_sugerido") or item.get("icono") or "").lower()
-        normalized.append(
-            {
-                "subtitulo": str(subtitulo).strip() or "Detalle",
-                "contenido": str(contenido).strip(),
-                "icono": SECTION_ICON_LABELS.get(icon_key, subtitulo.strip()[:1].upper() or "•"),
-            }
-        )
-    if not normalized and mensaje and mensaje.strip():
-        normalized.append(
-            {
-                "subtitulo": "Mensaje",
-                "contenido": mensaje.strip(),
-                "icono": "M",
-            }
-        )
-    return normalized
-
-
-def _draw_centered_lines(
-    draw: ImageDraw.ImageDraw,
-    lines: list[str],
-    *,
-    y_start: int,
-    line_height: int,
-    font: ImageFont.ImageFont,
-    fill: tuple[int, int, int],
-    canvas_width: int,
-) -> int:
-    y = y_start
-    for line in lines:
-        bbox = draw.textbbox((0, 0), line, font=font)
-        text_w = bbox[2] - bbox[0]
-        x = (canvas_width - text_w) // 2
-        draw.text((x, y), line, font=font, fill=fill)
-        y += line_height
-    return y
 
 
 def _render_poster_png(
@@ -322,149 +409,125 @@ def _render_poster_png(
     height = style["height"]
     margin = style["margin"]
     accent = style["accent"]
-    text_color = style["text"]
-    subtext = style["subtext"]
+    layout = style["layout"]
+    scale = layout["scale"]
 
-    image = _vertical_gradient((width, height), style["bg"], style["bg2"]).convert("RGBA")
+    image = _vertical_gradient((width, height), style["bg"], style["bg2"])
     draw = ImageDraw.Draw(image)
+    _draw_glow_circles(draw, width, height, accent)
 
-    header_h = int(96 * (width / 600))
-    draw.rectangle([(0, 0), (width, header_h)], fill=(*accent, 30))
-    draw.rectangle([(0, 0), (width, max(4, int(5 * width / 600)))], fill=accent)
+    header_h = int(88 * scale)
+    draw.rectangle([(0, 0), (width, header_h)], fill=_blend(accent, style["bg"], 0.55))
+    draw.rectangle([(0, 0), (width, max(4, int(6 * scale)))], fill=accent)
 
-    badge_font = _load_font(FONT_REGULAR_CANDIDATES, max(10, int(12 * width / 600)))
-    badge_w = min(width - margin * 2, 220)
+    badge_font = _load_font(FONT_BOLD, max(11, int(11 * scale)))
+    badge_text = style["badge"]
+    badge_bbox = draw.textbbox((0, 0), badge_text, font=badge_font)
+    badge_w = badge_bbox[2] - badge_bbox[0] + int(28 * scale)
+    badge_h = int(26 * scale)
     badge_x = (width - badge_w) // 2
-    badge_y = int(18 * width / 600)
-    badge_h = int(30 * width / 600)
+    badge_y = int(14 * scale)
     draw.rounded_rectangle(
         [(badge_x, badge_y), (badge_x + badge_w, badge_y + badge_h)],
         radius=badge_h // 2,
-        fill=(*accent, 55),
+        fill=_blend(accent, (0, 0, 0), 0.35),
+        outline=accent,
+        width=1,
     )
-    badge_bbox = draw.textbbox((0, 0), style["badge"], font=badge_font)
-    badge_text_w = badge_bbox[2] - badge_bbox[0]
     draw.text(
-        ((width - badge_text_w) // 2, badge_y + 6),
-        style["badge"],
+        (badge_x + (badge_w - (badge_bbox[2] - badge_bbox[0])) // 2, badge_y + 4),
+        badge_text,
         font=badge_font,
-        fill=style["accent_soft"],
-    )
-
-    icon_y = int(62 * width / 600)
-    icon_r = int(30 * width / 600)
-    draw.ellipse(
-        [(width // 2 - icon_r - 8, icon_y - icon_r - 8), (width // 2 + icon_r + 8, icon_y + icon_r + 8)],
-        fill=(*accent, 45),
-    )
-    draw.ellipse(
-        [(width // 2 - icon_r, icon_y - icon_r), (width // 2 + icon_r, icon_y + icon_r)],
-        fill=accent,
-    )
-    icon_font = _load_font(FONT_CANDIDATES, int(28 * width / 600))
-    icon_char = "!" if style["theme_key"] == "alerta" else "i"
-    icon_bbox = draw.textbbox((0, 0), icon_char, font=icon_font)
-    draw.text(
-        (width // 2 - (icon_bbox[2] - icon_bbox[0]) // 2, icon_y - (icon_bbox[3] - icon_bbox[1]) // 2 - 2),
-        icon_char,
-        font=icon_font,
         fill=(255, 255, 255),
     )
 
-    card_x = margin
-    card_y = int(120 * width / 600)
-    card_w = width - margin * 2
-    card_h = height - card_y - int(90 * width / 600)
-    draw.rounded_rectangle(
-        [(card_x, card_y), (card_x + card_w, card_y + card_h)],
-        radius=int(20 * width / 600),
-        fill=(255, 255, 255, 10),
-        outline=(*accent, 90),
-        width=max(1, int(1.5 * width / 600)),
-    )
-
-    title_font = _load_font(FONT_CANDIDATES, style["title_size"])
-    body_font = _load_font(FONT_REGULAR_CANDIDATES, style["body_size"])
-    subtitle_font = _load_font(FONT_REGULAR_CANDIDATES, style["subtitle_size"])
-    footer_font = _load_font(FONT_REGULAR_CANDIDATES, style["footer_size"])
-    mono_font = _load_font(FONT_MONO_CANDIDATES, max(9, style["footer_size"] - 2))
-
-    title_lines = _wrap_text(title.upper(), title_font, card_w - 48, 4)
-    title_y = card_y + int(36 * width / 600)
-    title_line_h = int(style["title_size"] * 1.2)
-    next_y = _draw_centered_lines(
-        draw,
-        title_lines,
-        y_start=title_y,
-        line_height=title_line_h,
-        font=title_font,
-        fill=text_color,
-        canvas_width=width,
-    )
+    y = header_h + int(20 * scale)
+    title_font = layout["title_font"]
+    for line in layout["title_lines"]:
+        bbox = draw.textbbox((0, 0), line, font=title_font)
+        draw.text(
+            ((width - (bbox[2] - bbox[0])) // 2, y),
+            line,
+            font=title_font,
+            fill=style["text"],
+        )
+        y += int(style["title_size"] * 1.12)
 
     if subtitulo:
-        sub_bbox = draw.textbbox((0, 0), subtitulo, font=subtitle_font)
-        draw.text(
-            ((width - (sub_bbox[2] - sub_bbox[0])) // 2, next_y + 8),
-            subtitulo,
-            font=subtitle_font,
-            fill=style["accent_soft"],
-        )
-        next_y += int(style["subtitle_size"] * 1.6)
+        sub_font = _load_font(FONT_REGULAR, style["subtitle_size"])
+        sub_lines = _wrap_text(subtitulo, sub_font, width - margin * 2, 2)
+        for line in sub_lines:
+            bbox = draw.textbbox((0, 0), line, font=sub_font)
+            draw.text(
+                ((width - (bbox[2] - bbox[0])) // 2, y + 6),
+                line,
+                font=sub_font,
+                fill=style["subtext"],
+            )
+            y += int(style["subtitle_size"] * 1.35)
+        y += int(8 * scale)
 
-    section_y = next_y + int(24 * width / 600)
-    inner_x = card_x + int(16 * width / 600)
-    inner_w = card_w - int(32 * width / 600)
+    y += int(16 * scale)
+    inner_x = margin + int(8 * scale)
+    inner_w = layout["inner_w"]
+    body_font = layout["body_font"]
+    heading_font = layout["heading_font"]
 
-    for section in sections:
-        content_lines = _wrap_text(section["contenido"], body_font, inner_w - 70, 3)
-        box_h = int(78 * width / 600) + max(0, len(content_lines) - 1) * int(22 * width / 600)
+    for index, section in enumerate(sections):
+        box_h = layout["section_heights"][index]
+        box_bg = style["section_bg"]
         draw.rounded_rectangle(
-            [(inner_x, section_y), (inner_x + inner_w, section_y + box_h)],
-            radius=int(14 * width / 600),
-            fill=(255, 255, 255, 12),
-            outline=(*accent, 60),
-            width=1,
+            [(inner_x, y), (inner_x + inner_w + int(16 * scale), y + box_h)],
+            radius=int(12 * scale),
+            fill=box_bg,
+            outline=accent,
+            width=max(1, int(2 * scale)),
+        )
+        draw.rectangle(
+            [(inner_x, y), (inner_x + int(6 * scale), y + box_h)],
+            fill=accent,
         )
 
-        icon_r = int(16 * width / 600)
-        icon_cx = inner_x + int(26 * width / 600)
-        icon_cy = section_y + int(28 * width / 600)
-        draw.ellipse(
-            [(icon_cx - icon_r, icon_cy - icon_r), (icon_cx + icon_r, icon_cy + icon_r)],
-            fill=(*accent, 65),
-        )
-        icon_font_small = _load_font(FONT_CANDIDATES, int(14 * width / 600))
-        icon_label = section["icono"][:1]
-        icon_bbox = draw.textbbox((0, 0), icon_label, font=icon_font_small)
-        draw.text(
-            (icon_cx - (icon_bbox[2] - icon_bbox[0]) // 2, icon_cy - (icon_bbox[3] - icon_bbox[1]) // 2 - 1),
-            icon_label,
-            font=icon_font_small,
-            fill=(255, 255, 255),
+        icon_font = _load_font(FONT_BOLD, max(10, int(11 * scale)))
+        icon_cx = inner_x + int(28 * scale)
+        icon_cy = y + int(28 * scale)
+        icon_r = int(18 * scale)
+        _draw_section_icon(
+            draw,
+            x=icon_cx,
+            y=icon_cy,
+            radius=icon_r,
+            label=section["icono"],
+            accent=accent,
+            font=icon_font,
         )
 
-        text_x = inner_x + int(52 * width / 600)
-        draw.text((text_x, section_y + 12), section["subtitulo"], font=subtitle_font, fill=text_color)
-        line_y = section_y + int(36 * width / 600)
+        text_x = inner_x + int(58 * scale)
+        draw.text((text_x, y + int(14 * scale)), section["subtitulo"], font=heading_font, fill=style["section_heading"])
+
+        content_lines = _wrap_text(section["contenido"], body_font, inner_w - int(56 * scale), 4)
+        line_y = y + int(40 * scale)
         for line in content_lines:
-            draw.text((text_x, line_y), line, font=body_font, fill=subtext)
-            line_y += int(22 * width / 600)
-        section_y += box_h + int(14 * width / 600)
+            draw.text((text_x, line_y), line, font=body_font, fill=style["section_body"])
+            line_y += int(24 * scale)
 
-    footer_y = height - int(42 * width / 600)
+        y += box_h + int(14 * scale)
+
+    footer_font = _load_font(FONT_REGULAR, style["footer_size"])
+    mono_font = _load_font(FONT_MONO, max(10, style["footer_size"] - 1))
+    footer_y = height - int(48 * scale)
     footer_bbox = draw.textbbox((0, 0), pie_pagina, font=footer_font)
     draw.text(
         ((width - (footer_bbox[2] - footer_bbox[0])) // 2, footer_y),
         pie_pagina,
         font=footer_font,
-        fill=subtext,
+        fill=_pick_text_on(style["bg2"], style["subtext"], (230, 240, 230), (50, 60, 50)),
     )
-    fecha_str = datetime.now().strftime("%d/%m/%Y · %H:%M")
-    draw.text((width - margin, height - int(18 * width / 600)), fecha_str, font=mono_font, fill=subtext)
-    draw.rectangle([(0, height - max(4, int(5 * width / 600))), (width, height)], fill=accent)
+    fecha = datetime.now().strftime("%d/%m/%Y · %H:%M")
+    draw.text((width - margin, height - int(20 * scale)), fecha, font=mono_font, fill=(180, 190, 180))
+    draw.rectangle([(0, height - max(4, int(6 * scale))), (width, height)], fill=accent)
 
-    return image.convert("RGB")
+    return image
 
 
 def generar_poster_alerta(
@@ -493,7 +556,7 @@ def generar_poster_alerta(
     tamano_fuente_pie: int | str | float | None = None,
     badge_texto: str | None = None,
 ) -> dict[str, Any]:
-    """Genera un poster PNG parametrizable. Qwen puede elegir colores, tamaños y secciones."""
+    """Genera poster PNG. Calcula alto automático si el pedido no cabe."""
     STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
     resolved_title = (titulo_principal or titulo or "Aviso importante").strip()
@@ -504,6 +567,7 @@ def generar_poster_alerta(
             "mensaje": "Indica al menos un mensaje o secciones_informativas para el poster.",
         }
 
+    sub = subtitulo.strip() if subtitulo else None
     style = _build_style(
         tema=tema,
         color_esquema=color_esquema,
@@ -521,7 +585,9 @@ def generar_poster_alerta(
         tamano_fuente_subtitulo=tamano_fuente_subtitulo,
         tamano_fuente_pie=tamano_fuente_pie,
         badge_texto=badge_texto,
-        num_secciones=len(sections),
+        title=resolved_title,
+        sections=sections,
+        subtitulo=sub,
     )
 
     pie_text = pie_pagina or "GPTEnterprice · Comunicado interno"
@@ -529,7 +595,7 @@ def generar_poster_alerta(
         style=style,
         title=resolved_title,
         sections=sections,
-        subtitulo=subtitulo.strip() if subtitulo else None,
+        subtitulo=sub,
         pie_pagina=pie_text,
     )
 
@@ -538,7 +604,7 @@ def generar_poster_alerta(
     image.save(filepath, format="PNG", optimize=True)
 
     public_url = f"{settings.public_base_url.rstrip('/')}/files/{filename}"
-    return {
+    result: dict[str, Any] = {
         "success": True,
         "archivo": filename,
         "formato": "png",
@@ -546,21 +612,16 @@ def generar_poster_alerta(
         "ancho": style["width"],
         "alto": style["height"],
         "tema": style["theme_key"],
-        "color_esquema": color_esquema or style["theme_key"],
-        "estilo": {
-            "color_fondo": color_fondo,
-            "color_fondo_secundario": color_fondo_secundario,
-            "color_texto": color_texto,
-            "color_texto_secundario": color_texto_secundario,
-            "color_acento": color_acento,
-            "tamano_fuente_titulo": style["title_size"],
-            "tamano_fuente_cuerpo": style["body_size"],
-        },
         "secciones": len(sections),
         "mensaje": f"Poster PNG '{resolved_title}' ({style['width']}×{style['height']}) generado.",
     }
+    if style.get("alto_ajustado"):
+        result["aviso"] = (
+            f"El alto pedido era insuficiente; se ajustó automáticamente a {style['height']}px "
+            "para que quepan título y secciones."
+        )
+    return result
 
 
 def generar_estructura_poster(**kwargs: Any) -> dict[str, Any]:
-    """Alias con el nombre sugerido por el esquema de tool-calling estructurado."""
     return generar_poster_alerta(**kwargs)

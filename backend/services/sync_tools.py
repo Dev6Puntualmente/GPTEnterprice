@@ -823,11 +823,16 @@ def _format_tool_result(
     if tool in ("generar_poster_alerta", "generar_estructura_poster"):
         if not data.get("success"):
             return prefix + (data.get("mensaje") or "No pude generar el poster.")
-        return prefix + (
-            f"**Poster PNG generado** ({data.get('ancho')}×{data.get('alto')} px · {data.get('tema', 'alerta')})\n\n"
-            f"![Poster]({data.get('url')})\n\n"
-            f"[Descargar PNG]({data.get('url')})"
-        )
+        url = data.get("url") or ""
+        aviso = data.get("aviso")
+        lines = [
+            f"**Poster PNG generado** ({data.get('ancho')}×{data.get('alto')} px)\n",
+            f"![Poster]({url})",
+            f"\n**Descargar:** {url}",
+        ]
+        if aviso:
+            lines.append(f"\n_{aviso}_")
+        return prefix + "\n".join(lines)
 
     if tool == "ejecutar_consulta_crm":
         if not data.get("success"):
