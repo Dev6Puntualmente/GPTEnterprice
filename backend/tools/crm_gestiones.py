@@ -390,6 +390,7 @@ def crm_listar_flujos(
 def crm_buscar_items_capa(
     catalog_id: str | None = None,
     nombre_capa: str | None = None,
+    nombre_arbol: str | None = None,
     tree_id: str | None = None,
     query: str | None = None,
     limite: int | str | float = 30,
@@ -397,13 +398,27 @@ def crm_buscar_items_capa(
     """Busca ítems dentro de una capa/catálogo del árbol de tipificación."""
     limite = _parse_limite(limite, default=30, maximum=100)
     resolved_catalog_id = catalog_id
+    resolved_tree_id = tree_id
+
+    if not resolved_tree_id and nombre_arbol:
+        row = fetch_crm_one(
+            """
+            SELECT id::text AS id
+            FROM config.trees
+            WHERE name ILIKE %s
+            ORDER BY is_active DESC, name
+            LIMIT 1
+            """,
+            (f"%{nombre_arbol.strip()}%",),
+        )
+        resolved_tree_id = row.get("id") if row else None
 
     if not resolved_catalog_id and nombre_capa:
         conditions = ["cat.name ILIKE %s"]
         params: list[Any] = [f"%{nombre_capa.strip()}%"]
-        if tree_id:
+        if resolved_tree_id:
             conditions.append("cat.tree_id = %s::uuid")
-            params.append(tree_id)
+            params.append(resolved_tree_id)
         row = fetch_crm_one(
             f"""
             SELECT cat.id::text AS id, cat.name, cat.level
@@ -494,7 +509,7 @@ def crm_dashboard_resumen(
             """
             SELECT COUNT(*) AS total
             FROM whatsapp.whatsapp_chats
-            WHERE status ILIKE 'active' OR status ILIKE 'open'
+            WHERE LOWER(COALESCE(status::text, '')) IN ('active', 'open', 'activo', 'abierto')
             """
         )
         por_canal = fetch_crm_all(

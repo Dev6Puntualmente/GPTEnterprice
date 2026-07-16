@@ -11,9 +11,9 @@ from services.synthesis import build_synthesis_system
 from services.intent import estimate_user_request_parts
 from services.sql_workflow import (
     SCHEMA_TOOL,
-    message_needs_sql_workflow,
     minimum_tool_steps,
     schema_fetched,
+    should_use_sql_workflow,
 )
 from services.sync_tools import run_sync_tool
 
@@ -25,17 +25,19 @@ Eres un agente con herramientas (function calling). El usuario pide datos o acci
 _REGLAS OBLIGATORIAS:
 1. Si la pregunta requiere datos reales del CRM, llamadas, reportes, etc. → DEBES usar una herramienta.
 2. NUNCA escribas SQL ni pseudo-código en la respuesta final. NUNCA expliques "puedes usar la función X" — EJECÚTALA tú.
-3. Si el usuario pide VARIAS cosas o datos analíticos → flujo OBLIGATORIO:
+3. PRIORIDAD: usa primero la herramienta dedicada (resumen_evaluacion_llamada, buscar_criterio_campana,
+   crm_dashboard_resumen, etc.). SQL (obtener_esquema + ejecutar_consulta_salescloser) SOLO si ninguna tool cubre el pedido.
+4. Si el usuario pide VARIAS cosas analíticas sin tool dedicada → flujo SQL:
    a) obtener_esquema_salescloser (si no está en datos ya obtenidos)
    b) ejecutar_consulta_salescloser — una consulta SELECT por cada parte del pedido
-4. NUNCA inventes columnas: calls.id (no call_id), campaigns.name (no campana), supervisor_criteria.categoria.
-5. Campañas con menos de N criterios → SQL con GROUP BY + HAVING COUNT(...) < N.
-6. Si piden Excel → exportar_excel_salescloser(query_sql) después del esquema.
-7. Si piden poster → generar_poster_alerta.
-8. Si piden presentación / PowerPoint / PPT / diapositivas → generar_presentacion.
+5. NUNCA inventes columnas: calls.id (no call_id), campaigns.name (no campana), supervisor_criteria.categoria.
+6. Campañas con menos de N criterios → listar_campanas_con_pocos_criterios (no SQL si existe esa tool).
+7. Si piden Excel → exportar_excel_salescloser(query_sql) después del esquema.
+8. Si piden poster → generar_poster_alerta.
+9. Si piden presentación / PowerPoint / PPT / diapositivas → generar_presentacion.
    Imágenes del usuario en archivos/imagenes; sin imágenes → fondos en degradado (no API externa).
-9. NUNCA digas que "el backend generará" un archivo sin action tool.
-10. Responde ÚNICAMENTE con JSON válido en una sola línea:
+10. NUNCA digas que "el backend generará" un archivo sin action tool.
+11. Responde ÚNICAMENTE con JSON válido en una sola línea:
 
 Para ejecutar herramienta:
 {"action":"tool","tool":"<nombre_exacto>","args":{...}}
@@ -224,7 +226,7 @@ def run_llm_tool_planner(
     base_system = f"{planner_system.strip()}\n\n---\nContexto del proyecto:\n{slim_project}"
 
     user_text = _last_user_text(messages)
-    sql_workflow = message_needs_sql_workflow(user_text)
+    sql_workflow = should_use_sql_workflow(user_text, tools, executed_tool_calls)
     request_parts = estimate_user_request_parts(user_text)
     max_steps = min(max(minimum_tool_steps(user_text), 2) if sql_workflow else max(request_parts, 2), 6)
 
@@ -246,6 +248,7 @@ def run_llm_tool_planner(
             executed_tool_calls.append(call)
 
     for step in range(max_steps):
+        sql_workflow = should_use_sql_workflow(user_text, tools, executed_tool_calls)
         step_context = ""
         if executed_tool_calls:
             step_context = (

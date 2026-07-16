@@ -27,7 +27,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-STORAGE_DIR = Path(settings.storage_dir)
+STORAGE_DIR = settings.storage_path
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -365,7 +365,7 @@ def download_file(filename: str):
     media_type = media_type_map.get(suffix, "application/octet-stream")
 
     return FileResponse(
-        path=filepath,
+        path=str(filepath.resolve()),
         filename=safe_name,
         media_type=media_type,
         content_disposition_type="attachment",

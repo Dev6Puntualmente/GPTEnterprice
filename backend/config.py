@@ -1,6 +1,9 @@
+from pathlib import Path
 from urllib.parse import quote, quote_plus
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_BACKEND_ROOT = Path(__file__).resolve().parent
 
 
 class Settings(BaseSettings):
@@ -87,6 +90,13 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def storage_path(self) -> Path:
+        candidate = Path(self.storage_dir)
+        if candidate.is_absolute():
+            return candidate.resolve()
+        return (_BACKEND_ROOT / candidate).resolve()
 
 
 settings = Settings()

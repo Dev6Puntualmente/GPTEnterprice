@@ -16,7 +16,7 @@ logger = logging.getLogger("gptenterprice.tools")
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 DB_PATH = DATA_DIR / "demo.db"
-STORAGE_DIR = Path(settings.storage_dir)
+STORAGE_DIR = settings.storage_path
 
 
 def _ensure_demo_db() -> None:
@@ -278,9 +278,9 @@ TOOL_CATALOG = {
     "crm_listar_gestiones": "CRM — Listar gestiones: documento=cédula, cliente=nombre, gestion_id=alias G00…",
     "crm_obtener_gestion": "CRM — Detalle y texto (text_management) de una gestión por alias G00… o UUID",
     "crm_listar_arboles_tipificacion": "CRM — Listar árboles de tipificación",
-    "crm_arbol_capas": "CRM — Ver capas (catálogos) de un árbol de tipificación",
+    "crm_arbol_capas": "CRM — Listar capas/catálogos de un árbol (NO buscar ítems)",
     "crm_listar_flujos": "CRM — Listar flujos nombrados de un árbol",
-    "crm_buscar_items_capa": "CRM — Buscar ítems dentro de una capa del flujo",
+    "crm_buscar_items_capa": "CRM — Ítems dentro de una capa (requiere nombre_capa; NO listar capas)",
     "crm_dashboard_resumen": "CRM — Métricas resumidas del dashboard (gestiones, clientes, agentes)",
     "crm_listar_conexiones": "CRM — Listar conexiones/canales activos",
     "crm_dashboard_whatsapp": "CRM — Dashboard WhatsApp (chats y mensajes por periodo)",

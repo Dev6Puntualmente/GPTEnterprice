@@ -15,6 +15,46 @@ from services.user_constraints import (
 from services.intent import extract_date_range
 from tools.registry import execute_tool
 
+def _extract_nombre_arbol(text: str) -> str | None:
+    """Extrae el nombre del árbol (ej. SAC) desde frases como 'capas del arbol sac'."""
+    if not text:
+        return None
+    patterns = (
+        r"capas?\s+(?:del?\s+)?(?:arbol|árbol)\s+([A-Za-z0-9_-]+)",
+        r"(?:del?\s+)?(?:arbol|árbol)\s+([A-Za-z0-9_-]+)",
+        r"tipificaci[oó]n\s+([A-Za-z0-9_-]+)",
+    )
+    stop = frozenset(
+        {"por", "favor", "listo", "dame", "las", "los", "del", "de", "el", "la", "ver", "muestra"}
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if not match:
+            continue
+        name = match.group(1).strip().rstrip(".,?!")
+        if name and name.lower() not in stop:
+            return name
+    return None
+
+
+def _extract_nombre_capa(text: str) -> str | None:
+    match = re.search(
+        r"(?:nombre\s+de\s+la\s+)?capa\s+(?:es\s+)?['\"]?([^'\"?\n.]+?)['\"]?(?:\s*$|[?.!])",
+        text,
+        re.IGNORECASE,
+    )
+    if match:
+        return match.group(1).strip()
+    match = re.search(
+        r"(?:items?|ítems?|elementos?)\s+(?:de\s+)?(?:la\s+)?capa\s+([^\n,.?!]+)",
+        text,
+        re.IGNORECASE,
+    )
+    if match:
+        return match.group(1).strip()
+    return None
+
+
 CALL_ID = re.compile(
     r"(?:id|#|n[úu]mero)\s*[:#]?\s*(\d+)"
     r"|(?:llamada)\s+(\d+)\b"
@@ -248,10 +288,15 @@ def _detect_crm_stats_intent(
 
     date_source = f"{user_context}\n{text}".strip()
     date_range = extract_date_range(date_source)
-    if "crm_dashboard_resumen" in allowed and date_range:
+    if "crm_dashboard_resumen" in allowed and (
+        date_range or re.search(r"dashboard", text, re.IGNORECASE)
+    ):
+        args: dict[str, Any] = {}
+        if date_range:
+            args["fecha_inicio"], args["fecha_fin"] = date_range
         return {
             "tool": "crm_dashboard_resumen",
-            "args": {"fecha_inicio": date_range[0], "fecha_fin": date_range[1]},
+            "args": args,
             "user_text": text,
         }
 
@@ -477,12 +522,19 @@ def _format_tool_result(
         return prefix + header + transcript
 
     if tool == "resumen_evaluacion_llamada":
-        return prefix + (
-            f"**Evaluación — llamada #{data.get('call_id')}**\n"
-            f"Cliente: {data.get('cliente', 'N/D')}\n"
-            f"Compliance score: {data.get('compliance_score', 'N/D')}\n\n"
-            f"{data.get('ai_evaluation') or json.dumps(data.get('evaluation_data'), ensure_ascii=False, indent=2)}"
-        )
+        if not data.get("success"):
+            return prefix + (data.get("mensaje") or "No encontré evaluación de esa llamada.")
+        resumen = data.get("resumen") or data.get("summary")
+        lines = [
+            f"**Evaluación — llamada #{data.get('call_id')}**",
+            f"Cliente: {data.get('cliente', 'N/D')}",
+            f"Compliance score: {data.get('compliance_score', 'N/D')}",
+        ]
+        if data.get("sentimiento"):
+            lines.append(f"Sentimiento: {data['sentimiento']}")
+        if resumen:
+            lines.append(f"\n{resumen}")
+        return prefix + "\n".join(lines)
 
     if tool == "obtener_detalle_llamada":
         if not data.get("success"):
@@ -553,10 +605,16 @@ def _format_tool_result(
                 f"{item.get('prompt', 'Sin prompt')}"
             )
         lines = [f"**{data.get('mensaje')}**\n"]
+        campanas_vistas: set[str] = set()
         for item in data.get("criterios") or []:
+            campana = str(item.get("campana") or item.get("campana_nombre") or "N/D")
+            campanas_vistas.add(campana)
             lines.append(
-                f"- **{item.get('titulo')}** ({item.get('campana')})\n  {str(item.get('prompt', ''))[:200]}"
+                f"- **{campana}** — criterio «{item.get('titulo')}» "
+                f"(categoría: {item.get('categoria') or 'N/D'})"
             )
+        if len(campanas_vistas) > 1:
+            lines.insert(1, "**Campañas:** " + ", ".join(sorted(campanas_vistas)) + "\n")
         return prefix + "\n".join(lines)
 
     if tool == "exportar_excel_salescloser":
@@ -712,6 +770,8 @@ def _format_tool_result(
         return prefix + "\n".join(lines)
 
     if tool == "crm_arbol_capas":
+        if not data.get("success"):
+            return prefix + (data.get("mensaje") or "No pude listar las capas de ese árbol.")
         capas = data.get("capas") or []
         arbol = data.get("arbol") or {}
         lines = [f"**Capas — {arbol.get('name', 'árbol')}**\n"]
@@ -734,6 +794,8 @@ def _format_tool_result(
         return prefix + "\n".join(lines)
 
     if tool == "crm_buscar_items_capa":
+        if not data.get("success"):
+            return prefix + (data.get("mensaje") or "No pude buscar ítems en esa capa.")
         items = data.get("items") or []
         capa = data.get("capa") or {}
         if not items:
@@ -1138,6 +1200,62 @@ def detect_sync_tool_intent(
             args["nombre_exacto"] = exact
         return {"tool": "listar_campanas", "args": args, "user_text": text}
 
+    if "listar_campanas_con_pocos_criterios" in allowed:
+        pocos = re.search(
+            r"(?:menos\s+de|con\s+menos\s+de)\s+(\d+)\s+criterios?",
+            text,
+            re.IGNORECASE,
+        )
+        if pocos:
+            return {
+                "tool": "listar_campanas_con_pocos_criterios",
+                "args": {"maximo": int(pocos.group(1))},
+                "user_text": text,
+            }
+
+    if "buscar_criterio_campana" in allowed:
+        en_campanas = re.search(
+            r"(?:en\s+)?(?:cu[aá]les?|qu[eé])\s+campa[ñn]as?\s+"
+            r"(?:est[aá]|tiene|tienen|usa|usan|aparece|figura).{0,50}"
+            r"criterio\s+(.+)",
+            text,
+            re.IGNORECASE,
+        )
+        if en_campanas:
+            return {
+                "tool": "buscar_criterio_campana",
+                "args": {"nombre": en_campanas.group(1).strip().rstrip("?.!")},
+                "user_text": text,
+            }
+        criterio_named = re.search(
+            r"criterio\s+['\"]?([^'\"?\n.]+?)['\"]?(?:\s*$|[?.!])",
+            text,
+            re.IGNORECASE,
+        )
+        if criterio_named and re.search(
+            r"campa[ñn]|categor[ií]a|supervisor",
+            text,
+            re.IGNORECASE,
+        ):
+            return {
+                "tool": "buscar_criterio_campana",
+                "args": {"nombre": criterio_named.group(1).strip()},
+                "user_text": text,
+            }
+
+    if "listar_criterios_campana" in allowed:
+        criterios_de = re.search(
+            r"criterios?\s+(?:de\s+)?(?:la\s+)?campa[ñn]a\s+(.+)",
+            text,
+            re.IGNORECASE,
+        )
+        if criterios_de:
+            return {
+                "tool": "listar_criterios_campana",
+                "args": {"campana": criterios_de.group(1).strip().rstrip("?.!")},
+                "user_text": text,
+            }
+
     if "listar_escalaciones" in allowed and "escalaci" in text.lower():
         estado = "PENDING"
         if "resuelt" in text.lower():
@@ -1186,7 +1304,7 @@ def detect_sync_tool_intent(
             return {"tool": "crm_listar_gestiones", "args": args, "user_text": text}
 
     if "crm_dashboard_resumen" in allowed and re.search(
-        r"dashboard|m[eé]trica|resumen.{0,20}crm",
+        r"dashboard|m[eé]trica|resumen.{0,20}crm|resumen\s+del\s+dashboard",
         text,
         re.IGNORECASE,
     ) and not re.search(r"whatsapp|tipol[oó]g|agente", text, re.IGNORECASE):
@@ -1250,8 +1368,17 @@ def detect_sync_tool_intent(
             args["nombre"] = nombre.group(1).strip()
         return {"tool": "crm_listar_arboles_tipificacion", "args": args, "user_text": text}
 
+    if "crm_buscar_items_capa" in allowed:
+        nombre_capa = _extract_nombre_capa(text)
+        if nombre_capa:
+            args: dict[str, Any] = {"nombre_capa": nombre_capa}
+            arbol = _extract_nombre_arbol(text) or _extract_nombre_arbol(full_context)
+            if arbol:
+                args["nombre_arbol"] = arbol
+            return {"tool": "crm_buscar_items_capa", "args": args, "user_text": text}
+
     if "crm_arbol_capas" in allowed and re.search(
-        r"capas?|cat[aá]logos?\s+(?:del?\s+)?[aá]rbol",
+        r"capas\b|cat[aá]logos?\s+(?:del?\s+)?[aá]rbol|(?:listar?|dame|muestra|ver)\s+(?:las?\s+)?capas",
         text,
         re.IGNORECASE,
     ):
@@ -1264,10 +1391,18 @@ def detect_sync_tool_intent(
         if tree_uuid:
             args["tree_id"] = tree_uuid.group(1)
         else:
-            nombre_arbol = re.search(r"[aá]rbol\s+([^\n,.?!]+)", text, re.IGNORECASE)
+            nombre_arbol = _extract_nombre_arbol(text) or _extract_nombre_arbol(full_context)
             if nombre_arbol:
-                args["nombre_arbol"] = nombre_arbol.group(1).strip()
-        if args:
+                args["nombre_arbol"] = nombre_arbol
+        if args or re.search(r"capas?\s+(?:del?\s+)?(?:arbol|árbol)", text, re.IGNORECASE):
+            if not args:
+                return {
+                    "tool": "crm_arbol_capas",
+                    "args": {},
+                    "user_text": text,
+                    "type": "clarify",
+                    "message": "¿De qué árbol de tipificación quieres ver las capas? Indica el nombre (ej. SAC).",
+                }
             return {"tool": "crm_arbol_capas", "args": args, "user_text": text}
 
     if "crm_listar_flujos" in allowed and re.search(r"flujos?", text, re.IGNORECASE):
@@ -1280,9 +1415,9 @@ def detect_sync_tool_intent(
         if tree_uuid:
             args["tree_id"] = tree_uuid.group(1)
         else:
-            nombre_arbol = re.search(r"(?:del?\s+)?[aá]rbol\s+([^\n,.?!]+)", text, re.IGNORECASE)
+            nombre_arbol = _extract_nombre_arbol(text) or _extract_nombre_arbol(full_context)
             if nombre_arbol:
-                args["nombre_arbol"] = nombre_arbol.group(1).strip()
+                args["nombre_arbol"] = nombre_arbol
         flujo = re.search(r"flujo\s+([^\n,.?!]+)", text, re.IGNORECASE)
         if flujo:
             args["nombre_flujo"] = flujo.group(1).strip()

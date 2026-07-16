@@ -11,7 +11,7 @@ from config import settings
 from db import fetch_all
 from utils.file_urls import public_file_url
 
-STORAGE_DIR = Path(settings.storage_dir)
+STORAGE_DIR = settings.storage_path
 
 READONLY_FORBIDDEN = (
     "insert",

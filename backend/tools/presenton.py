@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import shutil
 import uuid
 from pathlib import Path
@@ -10,7 +11,9 @@ import httpx
 from config import settings
 from utils.file_urls import public_file_url
 
-STORAGE_DIR = Path(settings.storage_dir)
+logger = logging.getLogger("gptenterprice.tools")
+
+STORAGE_DIR = settings.storage_path
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".bmp"}
 DEFAULT_GRADIENT_INSTRUCTIONS = (
     "Si no hay imágenes del usuario, usa fondos con degradados suaves (gradientes) "
@@ -252,11 +255,32 @@ def _presenton_download_urls(base: str, file_path: str) -> list[str]:
         return []
     if path.startswith("http://") or path.startswith("https://"):
         return [path]
+
     urls: list[str] = []
-    if path.startswith("/"):
-        urls.append(f"{base}{path}")
-        if path.startswith("/app_data/"):
-            urls.append(f"{base}/static{path}")
+    seen: set[str] = set()
+
+    def add(url: str) -> None:
+        if url and url not in seen:
+            seen.add(url)
+            urls.append(url)
+
+    normalized = path.replace("\\", "/")
+    if normalized.startswith("/"):
+        add(f"{base}{normalized}")
+        if normalized.startswith("/app_data/"):
+            add(f"{base}/static{normalized}")
+
+    if "/exports/" in normalized:
+        export_name = normalized.rsplit("/exports/", 1)[-1].lstrip("/")
+        if export_name:
+            add(f"{base}/app_data/exports/{export_name}")
+            add(f"{base}/static/app_data/exports/{export_name}")
+
+    basename = Path(normalized).name
+    if basename:
+        add(f"{base}/app_data/exports/{basename}")
+        add(f"{base}/static/app_data/exports/{basename}")
+
     return urls
 
 
@@ -288,7 +312,9 @@ def _copy_generated_file(
         shutil.copy2(src, dest)
         return public_file_url(dest.name)
 
+    tried: list[str] = []
     for url in _presenton_download_urls(base, source_path):
+        tried.append(url)
         try:
             request_kwargs: dict[str, Any] = {"follow_redirects": True, "timeout": 180.0}
             if auth:
@@ -297,9 +323,32 @@ def _copy_generated_file(
             if response.status_code < 400 and response.content:
                 saved = _save_export_bytes(response.content, source_path)
                 if saved:
+                    logger.info(
+                        "presenton export descargado desde %s → %s",
+                        url,
+                        saved,
+                    )
                     return saved
-        except Exception:
+            logger.warning(
+                "presenton export HTTP %s en %s (path=%s)",
+                response.status_code,
+                url,
+                source_path,
+            )
+        except Exception as exc:
+            logger.warning(
+                "presenton export falló en %s (path=%s): %s",
+                url,
+                source_path,
+                exc,
+            )
             continue
+
+    logger.error(
+        "presenton export no descargable (path=%s, urls=%s)",
+        source_path,
+        tried,
+    )
     return None
 
 
@@ -390,6 +439,83 @@ def generar_presentacion(
             if uploaded_ids:
                 body["files"] = uploaded_ids
             response = _post_generate(client, endpoint, auth, body)
+
+            if response.status_code == 401:
+                return {
+                    "success": False,
+                    "mensaje": "Credenciales Presenton rechazadas (401). Revisa usuario/contraseña.",
+                }
+            if response.status_code >= 400:
+                detail = response.text[:500]
+                if _template_export_error(detail):
+                    return {
+                        "success": False,
+                        "mensaje": (
+                            "Presenton generó el contenido pero falló la exportación PPTX/PDF "
+                            "(bug conocido v0.8.x en la API). La UI web funciona; la API puede fallar. "
+                            "Actualiza Presenton o usa export_as=pdf. Detalle: " + detail[:200]
+                        ),
+                    }
+                return {
+                    "success": False,
+                    "mensaje": f"Presenton respondió HTTP {response.status_code}: {detail}",
+                }
+
+            try:
+                data = response.json()
+            except Exception:
+                return {"success": False, "mensaje": "Presenton devolvió una respuesta no JSON."}
+
+            presentation_id = data.get("presentation_id")
+            file_path = str(data.get("path") or "")
+            edit_path = str(data.get("edit_path") or "")
+            actual_format = export_as
+            if file_path.lower().endswith(".pdf"):
+                actual_format = "pdf"
+
+            logger.info(
+                "presenton generate ok id=%s path=%s formato=%s",
+                presentation_id,
+                file_path,
+                actual_format,
+            )
+            download_url = _copy_generated_file(client, base, auth, file_path)
+            edit_url = ""
+            if not settings.presenton_internal:
+                edit_url = edit_path
+                if edit_path and not edit_path.startswith("http"):
+                    edit_url = f"{base}/{edit_path.lstrip('/')}"
+
+            payload: dict[str, Any] = {
+                "success": True,
+                "presentation_id": presentation_id,
+                "formato": actual_format,
+                "diapositivas": n_slides,
+                "imagenes_usuario": len(user_files),
+                "fondo": "imagenes_usuario" if user_files else "degradados",
+                "plantilla": body.get("template"),
+                "mensaje": "Presentación generada con Presenton.",
+            }
+            if download_url:
+                payload["url"] = download_url
+                payload["archivo"] = Path(download_url).name
+                payload["mensaje"] = f"Presentación {actual_format.upper()} lista para descargar."
+            if edit_url:
+                payload["editar_url"] = edit_url
+
+            if not download_url:
+                payload["mensaje"] = (
+                    "Presentación generada en Presenton, pero no se pudo copiar el archivo al backend. "
+                    "Revisa los logs del backend (descarga remota desde Presenton)."
+                )
+                if settings.presenton_internal:
+                    payload["nota_admin"] = (
+                        f"ID interno: {presentation_id}. Presenton solo en localhost."
+                    )
+                elif file_path:
+                    payload["path_servidor"] = file_path
+
+            return payload
     except httpx.ConnectError:
         return {
             "success": False,
@@ -402,75 +528,3 @@ def generar_presentacion(
         }
     except Exception as exc:
         return {"success": False, "mensaje": f"Error llamando a Presenton: {exc}"}
-
-    if response.status_code == 401:
-        return {
-            "success": False,
-            "mensaje": "Credenciales Presenton rechazadas (401). Revisa usuario/contraseña.",
-        }
-    if response.status_code >= 400:
-        detail = response.text[:500]
-        if _template_export_error(detail):
-            return {
-                "success": False,
-                "mensaje": (
-                    "Presenton generó el contenido pero falló la exportación PPTX/PDF "
-                    "(bug conocido v0.8.x en la API). La UI web funciona; la API puede fallar. "
-                    "Actualiza Presenton o usa export_as=pdf. Detalle: " + detail[:200]
-                ),
-            }
-        return {
-            "success": False,
-            "mensaje": f"Presenton respondió HTTP {response.status_code}: {detail}",
-        }
-
-    try:
-        data = response.json()
-    except Exception:
-        return {"success": False, "mensaje": "Presenton devolvió una respuesta no JSON."}
-
-    presentation_id = data.get("presentation_id")
-    file_path = str(data.get("path") or "")
-    edit_path = str(data.get("edit_path") or "")
-    actual_format = export_as
-    if file_path.lower().endswith(".pdf"):
-        actual_format = "pdf"
-
-    download_url = _copy_generated_file(client, base, auth, file_path)
-    edit_url = ""
-    if not settings.presenton_internal:
-        edit_url = edit_path
-        if edit_path and not edit_path.startswith("http"):
-            edit_url = f"{base}/{edit_path.lstrip('/')}"
-
-    payload: dict[str, Any] = {
-        "success": True,
-        "presentation_id": presentation_id,
-        "formato": actual_format,
-        "diapositivas": n_slides,
-        "imagenes_usuario": len(user_files),
-        "fondo": "imagenes_usuario" if user_files else "degradados",
-        "plantilla": body.get("template"),
-        "mensaje": "Presentación generada con Presenton.",
-    }
-    if download_url:
-        payload["url"] = download_url
-        payload["archivo"] = Path(download_url).name
-        payload["mensaje"] = f"Presentación {actual_format.upper()} lista para descargar."
-    if edit_url:
-        payload["editar_url"] = edit_url
-
-    if not download_url:
-        payload["mensaje"] = (
-            "Presentación generada en Presenton. El archivo se entrega vía GPTEnterprice "
-            "(los usuarios no acceden a Presenton directamente). "
-            "Si no hay enlace de descarga, ejecuta el backend en el mismo servidor que Presenton."
-        )
-        if settings.presenton_internal:
-            payload["nota_admin"] = (
-                f"ID interno: {presentation_id}. Presenton solo en localhost."
-            )
-        elif file_path:
-            payload["path_servidor"] = file_path
-
-    return payload

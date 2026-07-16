@@ -12,13 +12,20 @@ from services.chat_context import messages_for_synthesis, truncate_tool_result
 from services.intent import estimate_user_request_parts, message_needs_data_tools
 from services.sql_workflow import (
     SCHEMA_TOOL,
-    message_needs_sql_workflow,
     minimum_tool_steps,
     needs_more_sql_steps,
     schema_fetched,
+    should_use_sql_workflow,
     tools_for_turn,
 )
 from services.synthesis import build_focused_synthesis_system
+from services.tool_preflight import (
+    correct_tool_before_execute,
+    format_failed_tool_turn,
+    preflight_sync_intent,
+    tool_result_failed,
+)
+from services.sync_tools import run_sync_tool
 from tools.registry import execute_tool
 
 logger = logging.getLogger("gptenterprice.agent")
@@ -126,10 +133,58 @@ def _run_agent_loop(
             break
     requires_tools = bool(openai_tools) and message_needs_data_tools(last_user_text)
     request_parts = estimate_user_request_parts(last_user_text) if requires_tools else 1
-    sql_workflow = message_needs_sql_workflow(last_user_text)
+    sql_workflow = should_use_sql_workflow(last_user_text, openai_tools, executed_tools)
     min_tool_steps = minimum_tool_steps(last_user_text) if sql_workflow else request_parts
 
+    if not executed_tools and openai_tools and requires_tools and not sql_workflow:
+        preflight = preflight_sync_intent(messages, openai_tools)
+        if preflight and preflight.get("type") == "clarify":
+            return ImmediateResult(
+                message=str(preflight.get("message") or "Necesito un dato más para continuar."),
+                model_used=model,
+            )
+        if preflight and preflight.get("tool"):
+            tool_name = str(preflight["tool"])
+            arguments = preflight.get("args") if isinstance(preflight.get("args"), dict) else {}
+            logger.info("Preflight sync tool: %s args=%s", tool_name, arguments)
+            _emit_status(on_status, f"Ejecutando {_tool_label(tool_name)}...")
+            raw_result = execute_tool(tool_name, arguments)
+            if tool_result_failed(raw_result):
+                direct = format_failed_tool_turn(messages, tool_name, arguments, raw_result)
+                if direct:
+                    return ImmediateResult(message=direct, model_used=model)
+            result = truncate_tool_result(raw_result)
+            executed_tools.append(
+                {"name": tool_name, "arguments": arguments, "result": result},
+            )
+            try:
+                parsed = json.loads(result)
+                if isinstance(parsed, dict) and parsed.get("url"):
+                    files.append(str(parsed["url"]))
+            except json.JSONDecodeError:
+                pass
+            if stream_handoff:
+                return StreamHandoff(
+                    messages=messages_for_synthesis(messages),
+                    system_prompt=build_focused_synthesis_system(
+                        system_prompt,
+                        messages,
+                        executed_tools,
+                    ),
+                    model_used=model,
+                    tool_calls=executed_tools,
+                    files=files or None,
+                )
+            sync = run_sync_tool(preflight, messages)
+            return _finalize_agent_result(
+                str(sync.get("message") or "Listo."),
+                model,
+                executed_tools,
+                files,
+            )
+
     for _ in range(settings.max_tool_iterations):
+        sql_workflow = should_use_sql_workflow(last_user_text, openai_tools, executed_tools)
         if sql_workflow and not schema_fetched(executed_tools):
             _emit_status(on_status, "Obteniendo esquema de tablas...")
             logger.info("SQL workflow: auto-ejecutando %s", SCHEMA_TOOL)
@@ -162,9 +217,12 @@ def _run_agent_loop(
             if sql_workflow and not schema_fetched(executed_tools):
                 kwargs["tool_choice"] = "required"
             elif requires_tools and (
-                not executed_tools or needs_more_sql_steps(last_user_text, executed_tools)
-                if sql_workflow
-                else len(executed_tools) < request_parts
+                not executed_tools
+                or (
+                    needs_more_sql_steps(last_user_text, executed_tools, openai_tools)
+                    if sql_workflow
+                    else len(executed_tools) < request_parts
+                )
             ):
                 kwargs["tool_choice"] = "required"
             else:
@@ -204,6 +262,14 @@ def _run_agent_loop(
                 except json.JSONDecodeError:
                     arguments = {}
 
+                tool_name, arguments = correct_tool_before_execute(
+                    tool_name,
+                    arguments,
+                    last_user_text,
+                    messages,
+                    openai_tools,
+                )
+
                 _emit_status(
                     on_status,
                     "Generando presentación (2–5 min, no cierres la pestaña)..."
@@ -211,6 +277,15 @@ def _run_agent_loop(
                     else f"Ejecutando {_tool_label(tool_name)}...",
                 )
                 raw_result = execute_tool(tool_name, arguments)
+                if tool_result_failed(raw_result) and len(choice.tool_calls) == 1:
+                    direct = format_failed_tool_turn(messages, tool_name, arguments, raw_result)
+                    if direct and not stream_handoff:
+                        return ImmediateResult(
+                            message=direct,
+                            model_used=model,
+                            tool_calls=executed_tools
+                            + [{"name": tool_name, "arguments": arguments, "result": raw_result}],
+                        )
                 result = truncate_tool_result(raw_result)
                 executed_tools.append(
                     {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,7 @@ from config import settings
 from db import fetch_all, fetch_one
 from utils.file_urls import public_file_url
 
-STORAGE_DIR = Path(settings.storage_dir)
+STORAGE_DIR = settings.storage_path
 
 
 def _today() -> str:
@@ -206,6 +207,19 @@ def obtener_transcripcion_llamada(call_id: int | str | float) -> dict[str, Any]:
     }
 
 
+def _compact_evaluation_summary(ai: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(ai, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in ("summary", "resumen", "sentiment", "sentimiento", "compliance_score"):
+        if ai.get(key) not in (None, ""):
+            out[key if key != "summary" else "resumen"] = ai.get(key)
+    highlights = ai.get("highlights") or ai.get("puntos_clave")
+    if isinstance(highlights, list) and highlights:
+        out["puntos_clave"] = [str(item)[:200] for item in highlights[:6]]
+    return out
+
+
 def resumen_evaluacion_llamada(call_id: int | str | float) -> dict[str, Any]:
     try:
         call_id = int(float(call_id))
@@ -230,13 +244,27 @@ def resumen_evaluacion_llamada(call_id: int | str | float) -> dict[str, Any]:
     if not row:
         return {"success": False, "mensaje": f"No encontré evaluación para llamada {call_id}"}
 
+    ai = _merge_ai_evaluation(row)
+    compact = _compact_evaluation_summary(ai)
+    resumen_text = (
+        compact.get("resumen")
+        or (ai or {}).get("summary")
+        or (ai or {}).get("resumen")
+        or ""
+    )
+    if isinstance(resumen_text, dict):
+        resumen_text = json.dumps(resumen_text, ensure_ascii=False)[:1500]
+    elif not isinstance(resumen_text, str):
+        resumen_text = str(resumen_text or "")
+
     return {
         "success": True,
         "call_id": call_id,
         "cliente": row.get("customer_name"),
-        "compliance_score": row.get("compliance_score"),
-        "ai_evaluation": row.get("ai_evaluation"),
-        "evaluation_data": row.get("evaluation_data"),
+        "compliance_score": row.get("compliance_score") or (ai or {}).get("compliance_score"),
+        "sentimiento": compact.get("sentimiento") or (ai or {}).get("sentiment"),
+        "resumen": resumen_text.strip() or None,
+        "puntos_clave": compact.get("puntos_clave"),
         "mensaje": f"Evaluación obtenida para llamada {call_id}",
     }
 

@@ -239,7 +239,10 @@ const CRM_TOOLS: SeedTool[] = [
   },
   {
     name: "crm_arbol_capas",
-    description: "Capas/catálogos de un árbol de tipificación ordenadas por nivel.",
+    description:
+      "LISTAR las capas (catálogos/niveles) de un árbol de tipificación. " +
+      "Usar cuando pidan 'capas del árbol X' o 'catálogos del árbol'. " +
+      "NO usar crm_buscar_items_capa para esto. Requiere nombre_arbol o tree_id.",
     handlerKey: "crm_arbol_capas",
     parameters: {
       type: "object",
@@ -266,13 +269,16 @@ const CRM_TOOLS: SeedTool[] = [
   },
   {
     name: "crm_buscar_items_capa",
-    description: "Busca ítems dentro de una capa del árbol de tipificación.",
+    description:
+      "Buscar ÍTEMS dentro de una capa ya identificada (ej. ítems de la capa Canal). " +
+      "NO usar para listar capas del árbol — usa crm_arbol_capas. Requiere nombre_capa o catalog_id.",
     handlerKey: "crm_buscar_items_capa",
     parameters: {
       type: "object",
       properties: {
         catalog_id: { type: "string" },
-        nombre_capa: { type: "string" },
+        nombre_capa: { type: "string", description: "Nombre de la capa/catálogo (ej. Canal)" },
+        nombre_arbol: { type: "string", description: "Árbol al que pertenece la capa (ej. SAC)" },
         tree_id: { type: "string" },
         query: { type: "string" },
         limite: { type: "number" },
@@ -887,7 +893,9 @@ IMPORTANTE:
 - Tienes herramientas (functions) conectadas al CRM real.
 - Para CUALQUIER dato (clientes, gestiones, estadísticas, árboles, capas) DEBES invocar la herramienta correspondiente.
 - NUNCA escribas SQL ni digas "puedes usar la función X". Ejecuta la herramienta y responde con los resultados.
-- Si no hay resultados, dilo claramente.`;
+- Si no hay resultados, dilo claramente.
+- NUNCA inventes datos: si la herramienta falló o devolvió success:false, repítelo y pide lo que falte.
+- Capas del árbol → crm_arbol_capas. Ítems dentro de una capa → crm_buscar_items_capa.`;
 
   const crmContext = {
     nombre: "CRM Empresarial",

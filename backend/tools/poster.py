@@ -15,7 +15,7 @@ from PIL import Image, ImageDraw, ImageFont
 from config import settings
 from utils.file_urls import public_file_url
 
-STORAGE_DIR = Path(settings.storage_dir)
+STORAGE_DIR = settings.storage_path
 
 THEMES: dict[str, dict[str, str]] = {
     "alerta": {
