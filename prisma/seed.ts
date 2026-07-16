@@ -109,7 +109,7 @@ const PRESENTATION_TOOL_PARAMETERS: Prisma.InputJsonValue = {
       description: "Cantidad de diapositivas (3-30, default 8).",
     },
     idioma: { type: "string", description: "Idioma, ej. Spanish o English." },
-    plantilla: { type: "string", description: "Plantilla Presenton, ej. general." },
+    plantilla: { type: "string", description: "Plantilla Presenton, ej. neo-general, education, code." },
     tono: {
       type: "string",
       description: "default | casual | professional | funny | educational | sales_pitch",

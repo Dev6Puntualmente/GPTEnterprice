@@ -873,6 +873,8 @@ def _format_tool_result(
             lines.append(f"**Descargar:** {data['url']}")
         if data.get("editar_url"):
             lines.append(f"**Editar en Presenton:** {data['editar_url']}")
+        if data.get("nota_admin"):
+            lines.append(f"_{data['nota_admin']}_")
         if data.get("presentation_id"):
             lines.append(f"_ID: {data['presentation_id']}_")
         return prefix + "\n".join(lines)

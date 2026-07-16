@@ -16,6 +16,23 @@ DEFAULT_GRADIENT_INSTRUCTIONS = (
     "en cada diapositiva. No uses fotos de stock ni ilustraciones generadas por IA. "
     "Mantén un estilo corporativo limpio."
 )
+# Presenton 0.8.x: "general" ya no existe en la imagen Docker; usar neo-* o education/code.
+DEFAULT_PRESENTON_TEMPLATE = "neo-general"
+LEGACY_BROKEN_TEMPLATES = frozenset({"general"})
+KNOWN_TEMPLATE_IDS = (
+    "neo-general",
+    "neo-standard",
+    "neo-modern",
+    "neo-swift",
+    "education",
+    "code",
+    "standard",
+    "modern",
+    "swift",
+    "pitch-deck",
+    "report",
+    "product-overview",
+)
 
 
 def _presenton_base() -> str:
@@ -60,16 +77,57 @@ def _fetch_presenton_templates(
     base: str,
     auth: tuple[str, str],
 ) -> list[dict[str, Any]]:
+    templates: list[dict[str, Any]] = []
+
+    # Self-hosted: plantillas custom en DB (no existe /template/all de la nube).
     try:
-        response = client.get(f"{base}/api/v1/ppt/template/all", auth=auth)
-        if response.status_code >= 400:
-            return []
-        data = response.json()
-        if isinstance(data, list):
-            return [item for item in data if isinstance(item, dict)]
+        response = client.get(
+            f"{base}/api/v1/ppt/templates",
+            params={"page": 1, "page_size": 100},
+            auth=auth,
+        )
+        if response.status_code < 400:
+            data = response.json()
+            if isinstance(data, dict):
+                for item in data.get("items") or []:
+                    if not isinstance(item, dict) or not item.get("id"):
+                        continue
+                    layout_count = item.get("layout_count")
+                    templates.append(
+                        {
+                            "id": str(item["id"]),
+                            "name": str(item.get("name") or item["id"]),
+                            "total_layouts": layout_count if isinstance(layout_count, int) else 1,
+                        }
+                    )
     except Exception:
         pass
-    return []
+
+    if templates:
+        return templates
+
+    # Fallback: plantillas built-in vía API Next.js (/api/template?group=...)
+    discovered: list[dict[str, Any]] = []
+    for template_id in KNOWN_TEMPLATE_IDS:
+        try:
+            response = client.get(
+                f"{base}/api/template",
+                params={"group": template_id},
+                auth=auth,
+            )
+            if response.status_code >= 400:
+                continue
+            payload = response.json()
+            if isinstance(payload, dict) and payload.get("error"):
+                continue
+            layouts = payload.get("layouts") if isinstance(payload, dict) else None
+            total = len(layouts) if isinstance(layouts, list) else 1
+            discovered.append(
+                {"id": template_id, "name": template_id, "total_layouts": total}
+            )
+        except Exception:
+            continue
+    return discovered
 
 
 def _resolve_template_id(
@@ -78,16 +136,18 @@ def _resolve_template_id(
     auth: tuple[str, str],
     preferred: str | None,
 ) -> str | None:
-    """Elige plantilla válida. 'general' falla en algunas versiones de Presenton (bug export)."""
+    """Elige plantilla válida. 'general' falla en Presenton 0.8.x (plantilla eliminada)."""
     templates = _fetch_presenton_templates(client, base, auth)
-    if not templates:
-        return preferred or None
 
     by_id = {str(t.get("id") or ""): t for t in templates if t.get("id")}
     by_name = {str(t.get("name") or "").lower(): t for t in templates if t.get("name")}
 
-    want = (preferred or settings.presenton_default_template or "").strip()
-    if want:
+    want = (
+        preferred
+        or settings.presenton_default_template
+        or DEFAULT_PRESENTON_TEMPLATE
+    ).strip()
+    if want and want not in LEGACY_BROKEN_TEMPLATES:
         if want in by_id:
             return want
         match = by_name.get(want.lower())
@@ -102,15 +162,64 @@ def _resolve_template_id(
     if with_layouts:
         return str(with_layouts[0].get("id"))
 
-    fallbacks = ("standard", "modern", "swift", "general")
-    for key in fallbacks:
+    for key in KNOWN_TEMPLATE_IDS:
         if key in by_id:
             return key
         if key in by_name:
             return str(by_name[key].get("id"))
 
-    first = templates[0]
-    return str(first.get("id")) if first.get("id") else None
+    if templates:
+        first = templates[0]
+        return str(first.get("id")) if first.get("id") else None
+
+    return DEFAULT_PRESENTON_TEMPLATE
+
+
+def _template_export_error(detail: str) -> bool:
+    lowered = detail.lower()
+    return (
+        "template" in lowered and "not found" in lowered
+    ) or "failed to fetch or parse schema" in lowered
+
+
+def _post_generate(
+    client: httpx.Client,
+    endpoint: str,
+    auth: tuple[str, str],
+    body: dict[str, Any],
+) -> httpx.Response:
+    """Genera presentación; reintenta con otra plantilla o PDF si falla export."""
+    response = client.post(endpoint, json=body, auth=auth)
+    if response.status_code < 400:
+        return response
+
+    detail = response.text
+    if not _template_export_error(detail):
+        return response
+
+    failed_template = body.get("template")
+    retry_templates = [
+        tid
+        for tid in KNOWN_TEMPLATE_IDS
+        if tid != failed_template and tid not in LEGACY_BROKEN_TEMPLATES
+    ]
+    for template_id in retry_templates:
+        body_retry = dict(body)
+        body_retry["template"] = template_id
+        response = client.post(endpoint, json=body_retry, auth=auth)
+        if response.status_code < 400:
+            return response
+
+    # PDF a veces exporta cuando PPTX falla
+    if body.get("export_as") == "pptx":
+        body_pdf = dict(body)
+        body_pdf["export_as"] = "pdf"
+        body_pdf["template"] = DEFAULT_PRESENTON_TEMPLATE
+        response = client.post(endpoint, json=body_pdf, auth=auth)
+        if response.status_code < 400:
+            return response
+
+    return response
 
 
 def _upload_files_to_presenton(
@@ -175,7 +284,7 @@ def generar_presentacion(
     titulo: str | None = None,
     num_diapositivas: int | str | float = 8,
     idioma: str = "Spanish",
-    plantilla: str = "general",
+    plantilla: str = DEFAULT_PRESENTON_TEMPLATE,
     tono: str = "professional",
     densidad: str = "standard",
     formato: str = "pptx",
@@ -256,7 +365,7 @@ def generar_presentacion(
             uploaded_ids = _upload_files_to_presenton(client, base, auth, user_files)
             if uploaded_ids:
                 body["files"] = uploaded_ids
-            response = client.post(endpoint, json=body, auth=auth)
+            response = _post_generate(client, endpoint, auth, body)
     except httpx.ConnectError:
         return {
             "success": False,
@@ -277,6 +386,15 @@ def generar_presentacion(
         }
     if response.status_code >= 400:
         detail = response.text[:500]
+        if _template_export_error(detail):
+            return {
+                "success": False,
+                "mensaje": (
+                    "Presenton generó el contenido pero falló la exportación PPTX/PDF "
+                    "(bug conocido v0.8.x en la API). La UI web funciona; la API puede fallar. "
+                    "Actualiza Presenton o usa export_as=pdf. Detalle: " + detail[:200]
+                ),
+            }
         return {
             "success": False,
             "mensaje": f"Presenton respondió HTTP {response.status_code}: {detail}",
@@ -290,16 +408,21 @@ def generar_presentacion(
     presentation_id = data.get("presentation_id")
     file_path = str(data.get("path") or "")
     edit_path = str(data.get("edit_path") or "")
+    actual_format = export_as
+    if file_path.lower().endswith(".pdf"):
+        actual_format = "pdf"
 
     download_url = _copy_generated_file(file_path)
-    edit_url = edit_path
-    if edit_path and not edit_path.startswith("http"):
-        edit_url = f"{base}/{edit_path.lstrip('/')}"
+    edit_url = ""
+    if not settings.presenton_internal:
+        edit_url = edit_path
+        if edit_path and not edit_path.startswith("http"):
+            edit_url = f"{base}/{edit_path.lstrip('/')}"
 
     payload: dict[str, Any] = {
         "success": True,
         "presentation_id": presentation_id,
-        "formato": export_as,
+        "formato": actual_format,
         "diapositivas": n_slides,
         "imagenes_usuario": len(user_files),
         "fondo": "imagenes_usuario" if user_files else "degradados",
@@ -309,15 +432,21 @@ def generar_presentacion(
     if download_url:
         payload["url"] = download_url
         payload["archivo"] = Path(download_url).name
-        payload["mensaje"] = f"Presentación {export_as.upper()} lista para descargar."
+        payload["mensaje"] = f"Presentación {actual_format.upper()} lista para descargar."
     if edit_url:
         payload["editar_url"] = edit_url
 
-    if not download_url and not edit_url:
+    if not download_url:
         payload["mensaje"] = (
-            "Presenton generó la presentación pero no hay URL de descarga local. "
-            "Monta app_data compartido o expón Presenton con reverse proxy."
+            "Presentación generada en Presenton. El archivo se entrega vía GPTEnterprice "
+            "(los usuarios no acceden a Presenton directamente). "
+            "Si no hay enlace de descarga, ejecuta el backend en el mismo servidor que Presenton."
         )
-        payload["path_servidor"] = file_path or None
+        if settings.presenton_internal:
+            payload["nota_admin"] = (
+                f"ID interno: {presentation_id}. Presenton solo en localhost."
+            )
+        elif file_path:
+            payload["path_servidor"] = file_path
 
     return payload

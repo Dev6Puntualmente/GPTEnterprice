@@ -46,7 +46,9 @@ class Settings(BaseSettings):
     presenton_url: str | None = None
     presenton_username: str | None = None
     presenton_password: str | None = None
-    presenton_default_template: str | None = None
+    presenton_default_template: str = "neo-general"
+    # Si true, no devolver editar_url de Presenton al usuario (solo backend habla con :5001).
+    presenton_internal: bool = True
     # Si false, no intenta tool-calling nativo en vLLM (útil con parser hermes pendiente).
     vllm_native_tools: bool = True
     # Si false (default cuando vllm_tools_enabled=true), el LLM elige tools; no regex sync.
