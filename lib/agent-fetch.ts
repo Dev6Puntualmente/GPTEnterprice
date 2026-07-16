@@ -12,7 +12,7 @@ export function agentFetchErrorHint(error: unknown): string {
     return " El agente puede estar arrancando; se reintentó automáticamente.";
   }
   if (message.includes("timeout") || message.includes("aborted")) {
-    return " FastAPI tardó demasiado (consulta CRM o vLLM lento).";
+    return " La operación tardó demasiado (presentaciones pueden tardar varios minutos).";
   }
   return "";
 }

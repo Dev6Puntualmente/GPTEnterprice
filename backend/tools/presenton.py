@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from config import settings
+from utils.file_urls import public_file_url
 
 STORAGE_DIR = Path(settings.storage_dir)
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".bmp"}
@@ -33,6 +34,42 @@ KNOWN_TEMPLATE_IDS = (
     "report",
     "product-overview",
 )
+
+_TONE_ALIASES = {
+    "educativo": "educational",
+    "educational": "educational",
+    "profesional": "professional",
+    "professional": "professional",
+    "casual": "casual",
+    "informal": "casual",
+    "ventas": "sales_pitch",
+    "sales_pitch": "sales_pitch",
+    "sales": "sales_pitch",
+    "divertido": "funny",
+    "funny": "funny",
+    "default": "default",
+}
+
+_VERBOSITY_ALIASES = {
+    "concise": "concise",
+    "conciso": "concise",
+    "standard": "standard",
+    "estandar": "standard",
+    "estándar": "standard",
+    "text-heavy": "text-heavy",
+    "detallado": "text-heavy",
+    "denso": "text-heavy",
+}
+
+
+def _normalize_tone(value: str | None) -> str:
+    key = (value or "professional").strip().lower()
+    return _TONE_ALIASES.get(key, key if key in _TONE_ALIASES.values() else "professional")
+
+
+def _normalize_verbosity(value: str | None) -> str:
+    key = (value or "standard").strip().lower()
+    return _VERBOSITY_ALIASES.get(key, key if key in _VERBOSITY_ALIASES.values() else "standard")
 
 
 def _presenton_base() -> str:
@@ -72,62 +109,25 @@ def _resolve_local_file(path_or_url: str) -> Path | None:
     return None
 
 
-def _fetch_presenton_templates(
+def _template_group_available(
     client: httpx.Client,
     base: str,
     auth: tuple[str, str],
-) -> list[dict[str, Any]]:
-    templates: list[dict[str, Any]] = []
-
-    # Self-hosted: plantillas custom en DB (no existe /template/all de la nube).
+    template_id: str,
+) -> bool:
     try:
         response = client.get(
-            f"{base}/api/v1/ppt/templates",
-            params={"page": 1, "page_size": 100},
+            f"{base}/api/template",
+            params={"group": template_id},
             auth=auth,
+            timeout=15.0,
         )
-        if response.status_code < 400:
-            data = response.json()
-            if isinstance(data, dict):
-                for item in data.get("items") or []:
-                    if not isinstance(item, dict) or not item.get("id"):
-                        continue
-                    layout_count = item.get("layout_count")
-                    templates.append(
-                        {
-                            "id": str(item["id"]),
-                            "name": str(item.get("name") or item["id"]),
-                            "total_layouts": layout_count if isinstance(layout_count, int) else 1,
-                        }
-                    )
+        if response.status_code >= 400:
+            return False
+        payload = response.json()
+        return not (isinstance(payload, dict) and payload.get("error"))
     except Exception:
-        pass
-
-    if templates:
-        return templates
-
-    # Fallback: plantillas built-in vía API Next.js (/api/template?group=...)
-    discovered: list[dict[str, Any]] = []
-    for template_id in KNOWN_TEMPLATE_IDS:
-        try:
-            response = client.get(
-                f"{base}/api/template",
-                params={"group": template_id},
-                auth=auth,
-            )
-            if response.status_code >= 400:
-                continue
-            payload = response.json()
-            if isinstance(payload, dict) and payload.get("error"):
-                continue
-            layouts = payload.get("layouts") if isinstance(payload, dict) else None
-            total = len(layouts) if isinstance(layouts, list) else 1
-            discovered.append(
-                {"id": template_id, "name": template_id, "total_layouts": total}
-            )
-        except Exception:
-            continue
-    return discovered
+        return False
 
 
 def _resolve_template_id(
@@ -135,42 +135,23 @@ def _resolve_template_id(
     base: str,
     auth: tuple[str, str],
     preferred: str | None,
-) -> str | None:
-    """Elige plantilla válida. 'general' falla en Presenton 0.8.x (plantilla eliminada)."""
-    templates = _fetch_presenton_templates(client, base, auth)
+) -> str:
+    """Elige plantilla válida sin escanear todas las plantillas (más rápido en API)."""
+    candidates: list[str] = []
+    for raw in (
+        preferred,
+        settings.presenton_default_template,
+        DEFAULT_PRESENTON_TEMPLATE,
+        *KNOWN_TEMPLATE_IDS,
+    ):
+        key = (raw or "").strip()
+        if not key or key in LEGACY_BROKEN_TEMPLATES or key in candidates:
+            continue
+        candidates.append(key)
 
-    by_id = {str(t.get("id") or ""): t for t in templates if t.get("id")}
-    by_name = {str(t.get("name") or "").lower(): t for t in templates if t.get("name")}
-
-    want = (
-        preferred
-        or settings.presenton_default_template
-        or DEFAULT_PRESENTON_TEMPLATE
-    ).strip()
-    if want and want not in LEGACY_BROKEN_TEMPLATES:
-        if want in by_id:
-            return want
-        match = by_name.get(want.lower())
-        if match:
-            return str(match.get("id"))
-
-    # Preferir plantillas con layouts cargados (menos fallos en export)
-    with_layouts = [
-        t for t in templates
-        if isinstance(t.get("total_layouts"), int) and t.get("total_layouts", 0) > 0
-    ]
-    if with_layouts:
-        return str(with_layouts[0].get("id"))
-
-    for key in KNOWN_TEMPLATE_IDS:
-        if key in by_id:
-            return key
-        if key in by_name:
-            return str(by_name[key].get("id"))
-
-    if templates:
-        first = templates[0]
-        return str(first.get("id")) if first.get("id") else None
+    for template_id in candidates:
+        if _template_group_available(client, base, auth, template_id):
+            return template_id
 
     return DEFAULT_PRESENTON_TEMPLATE
 
@@ -265,18 +246,61 @@ def _upload_files_to_presenton(
     return uploaded
 
 
-def _copy_generated_file(source_path: str) -> str | None:
-    """Copia el PPTX/PDF generado a storage/ si la ruta existe en el mismo host."""
+def _presenton_download_urls(base: str, file_path: str) -> list[str]:
+    path = (file_path or "").strip()
+    if not path:
+        return []
+    if path.startswith("http://") or path.startswith("https://"):
+        return [path]
+    urls: list[str] = []
+    if path.startswith("/"):
+        urls.append(f"{base}{path}")
+        if path.startswith("/app_data/"):
+            urls.append(f"{base}/static{path}")
+    return urls
+
+
+def _save_export_bytes(content: bytes, source_path: str) -> str | None:
+    if not content:
+        return None
+    ext = Path(source_path).suffix.lower() or ".pdf"
+    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    dest = STORAGE_DIR / f"presentacion_{uuid.uuid4().hex[:10]}{ext}"
+    dest.write_bytes(content)
+    return public_file_url(dest.name)
+
+
+def _copy_generated_file(
+    client: httpx.Client,
+    base: str,
+    auth: tuple[str, str] | None,
+    source_path: str,
+) -> str | None:
+    """Guarda el export en storage/: copia local o descarga desde Presenton remoto."""
     if not source_path:
         return None
+
     src = Path(source_path)
-    if not src.is_file():
-        return None
-    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-    ext = src.suffix.lower() or ".pptx"
-    dest = STORAGE_DIR / f"presentacion_{uuid.uuid4().hex[:10]}{ext}"
-    shutil.copy2(src, dest)
-    return f"{settings.public_base_url.rstrip('/')}/files/{dest.name}"
+    if src.is_file():
+        STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+        ext = src.suffix.lower() or ".pptx"
+        dest = STORAGE_DIR / f"presentacion_{uuid.uuid4().hex[:10]}{ext}"
+        shutil.copy2(src, dest)
+        return public_file_url(dest.name)
+
+    for url in _presenton_download_urls(base, source_path):
+        try:
+            request_kwargs: dict[str, Any] = {"follow_redirects": True, "timeout": 180.0}
+            if auth:
+                request_kwargs["auth"] = auth
+            response = client.get(url, **request_kwargs)
+            if response.status_code < 400 and response.content:
+                saved = _save_export_bytes(response.content, source_path)
+                if saved:
+                    return saved
+        except Exception:
+            continue
+    return None
 
 
 def generar_presentacion(
@@ -342,8 +366,8 @@ def generar_presentacion(
         "content": text,
         "n_slides": n_slides,
         "language": idioma or "Spanish",
-        "tone": tono or "professional",
-        "verbosity": densidad or "standard",
+        "tone": _normalize_tone(tono),
+        "verbosity": _normalize_verbosity(densidad),
         "export_as": export_as,
         "include_title_slide": True,
     }
@@ -412,7 +436,7 @@ def generar_presentacion(
     if file_path.lower().endswith(".pdf"):
         actual_format = "pdf"
 
-    download_url = _copy_generated_file(file_path)
+    download_url = _copy_generated_file(client, base, auth, file_path)
     edit_url = ""
     if not settings.presenton_internal:
         edit_url = edit_path

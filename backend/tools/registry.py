@@ -10,6 +10,7 @@ from typing import Any
 from openpyxl import Workbook
 
 from config import settings
+from utils.file_urls import public_file_url
 
 logger = logging.getLogger("gptenterprice.tools")
 
@@ -121,7 +122,7 @@ def generar_reporte_excel(
     filepath = STORAGE_DIR / filename
     workbook.save(filepath)
 
-    public_url = f"{settings.public_base_url.rstrip('/')}/files/{filename}"
+    public_url = public_file_url(filename)
     return {
         "success": True,
         "total_usuarios": len(rows),

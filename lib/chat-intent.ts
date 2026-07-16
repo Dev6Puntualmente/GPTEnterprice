@@ -17,6 +17,16 @@ const SPANISH_MONTHS: Record<string, number> = {
 const EXCEL_KEYWORDS = ["excel", "xlsx", "exportar", "reporte", "informe"];
 const CALLS_KEYWORDS = ["llamada", "llamadas", "llmada", "llmadas", "calls"];
 
+/** Presenton puede tardar varios minutos (LLM + export PDF). */
+export const PRESENTATION_CHAT_TIMEOUT_MS = 720_000;
+export const DEFAULT_CHAT_TIMEOUT_MS = 120_000;
+
+export function looksLikePresentationRequest(text: string): boolean {
+  return /(?:crea|genera|haz).{0,24}(?:presentaci[oó]n|diapositivas?|powerpoint|pptx?)|\bpresentaci[oó]n\b|\bdiapositivas?\b|\bpowerpoint\b|\bpptx?\b|\bpitch\s+deck\b/i.test(
+    text,
+  );
+}
+
 export type HeavyToolIntent = {
   tool: "reporte_llamadas_excel" | "generar_reporte_excel";
   label: string;

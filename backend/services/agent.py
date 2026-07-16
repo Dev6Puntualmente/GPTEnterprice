@@ -204,7 +204,12 @@ def _run_agent_loop(
                 except json.JSONDecodeError:
                     arguments = {}
 
-                _emit_status(on_status, f"Ejecutando {_tool_label(tool_name)}...")
+                _emit_status(
+                    on_status,
+                    "Generando presentación (2–5 min, no cierres la pestaña)..."
+                    if tool_name == "generar_presentacion"
+                    else f"Ejecutando {_tool_label(tool_name)}...",
+                )
                 raw_result = execute_tool(tool_name, arguments)
                 result = truncate_tool_result(raw_result)
                 executed_tools.append(

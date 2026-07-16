@@ -368,4 +368,5 @@ def download_file(filename: str):
         path=filepath,
         filename=safe_name,
         media_type=media_type,
+        content_disposition_type="attachment",
     )

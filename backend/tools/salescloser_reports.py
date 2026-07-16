@@ -9,6 +9,7 @@ from openpyxl import Workbook
 
 from config import settings
 from db import fetch_all
+from utils.file_urls import public_file_url
 
 STORAGE_DIR = Path(settings.storage_dir)
 
@@ -263,7 +264,7 @@ def exportar_excel_salescloser(
     filepath = STORAGE_DIR / filename
     workbook.save(filepath)
 
-    public_url = f"{settings.public_base_url.rstrip('/')}/files/{filename}"
+    public_url = public_file_url(filename)
     return {
         "success": True,
         "total_filas": len(rows),

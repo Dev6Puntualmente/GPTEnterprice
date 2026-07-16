@@ -870,7 +870,9 @@ def _format_tool_result(
             f"_Fondo visual: {fondo}_",
         ]
         if data.get("url"):
-            lines.append(f"**Descargar:** {data['url']}")
+            lines.append(
+                "_Usa el botón de descarga debajo del mensaje para obtener el archivo._"
+            )
         if data.get("editar_url"):
             lines.append(f"**Editar en Presenton:** {data['editar_url']}")
         if data.get("nota_admin"):

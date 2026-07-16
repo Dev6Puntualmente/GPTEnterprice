@@ -13,6 +13,7 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont
 
 from config import settings
+from utils.file_urls import public_file_url
 
 STORAGE_DIR = Path(settings.storage_dir)
 
@@ -603,7 +604,7 @@ def generar_poster_alerta(
     filepath = STORAGE_DIR / filename
     image.save(filepath, format="PNG", optimize=True)
 
-    public_url = f"{settings.public_base_url.rstrip('/')}/files/{filename}"
+    public_url = public_file_url(filename)
     result: dict[str, Any] = {
         "success": True,
         "archivo": filename,

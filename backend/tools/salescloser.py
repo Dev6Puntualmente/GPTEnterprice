@@ -8,6 +8,7 @@ from openpyxl import Workbook
 
 from config import settings
 from db import fetch_all, fetch_one
+from utils.file_urls import public_file_url
 
 STORAGE_DIR = Path(settings.storage_dir)
 
@@ -832,7 +833,7 @@ def reporte_llamadas_excel(
     filepath = STORAGE_DIR / filename
     workbook.save(filepath)
 
-    public_url = f"{settings.public_base_url.rstrip('/')}/files/{filename}"
+    public_url = public_file_url(filename)
     mensaje = f"Reporte de {len(rows)} llamada(s) generado"
     if aviso:
         mensaje = f"{mensaje}. {aviso}"
