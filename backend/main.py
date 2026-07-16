@@ -360,6 +360,7 @@ def download_file(filename: str):
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
         ".pdf": "application/pdf",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     }
     media_type = media_type_map.get(suffix, "application/octet-stream")
 

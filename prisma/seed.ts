@@ -96,6 +96,58 @@ const POSTER_TOOL: SeedTool = {
   parameters: POSTER_TOOL_PARAMETERS,
 };
 
+const PRESENTATION_TOOL_PARAMETERS: Prisma.InputJsonValue = {
+  type: "object",
+  properties: {
+    contenido: {
+      type: "string",
+      description: "Tema, outline o texto base de la presentación.",
+    },
+    titulo: { type: "string", description: "Título opcional de la presentación." },
+    num_diapositivas: {
+      type: "number",
+      description: "Cantidad de diapositivas (3-30, default 8).",
+    },
+    idioma: { type: "string", description: "Idioma, ej. Spanish o English." },
+    plantilla: { type: "string", description: "Plantilla Presenton, ej. general." },
+    tono: {
+      type: "string",
+      description: "default | casual | professional | funny | educational | sales_pitch",
+    },
+    densidad: {
+      type: "string",
+      description: "concise | standard | text-heavy",
+    },
+    formato: { type: "string", description: "pptx o pdf." },
+    instrucciones: {
+      type: "string",
+      description: "Instrucciones extra para el generador de diapositivas.",
+    },
+    archivos: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        "Rutas o URLs de imágenes del usuario (storage/ o /files/...). Si no hay ninguna, se usan fondos en degradado.",
+    },
+    imagenes: {
+      type: "array",
+      items: { type: "string" },
+      description: "Alias de archivos — mismas imágenes del usuario.",
+    },
+  },
+  required: ["contenido"],
+};
+
+const PRESENTATION_TOOL: SeedTool = {
+  name: "generar_presentacion",
+  description:
+    "Genera presentación PPTX o PDF vía Presenton (Apache 2.0, self-hosted). " +
+    "Imágenes: el usuario las sube (archivos/imagenes); si no hay ninguna → fondos en degradado. " +
+    "Sin API de imágenes externa por ahora. Usar para presentación, diapositivas, PowerPoint, PPT o pitch.",
+  handlerKey: "generar_presentacion",
+  parameters: PRESENTATION_TOOL_PARAMETERS,
+};
+
 const CRM_TOOLS: SeedTool[] = [
   {
     name: "crm_buscar_clientes",
@@ -279,6 +331,7 @@ const CRM_TOOLS: SeedTool[] = [
     },
   },
   POSTER_TOOL,
+  PRESENTATION_TOOL,
   {
     name: "crm_resumen_estadisticas",
     description: "Estadísticas globales del CRM.",
@@ -355,7 +408,7 @@ const SALESCLOSER_TOOLS: SeedTool[] = [
   {
     name: "buscar_criterio_campana",
     description:
-      "Busca un criterio de campaña por nombre/título (ej. 'Tono de voz alta') y devuelve su prompt completo. Filtro opcional por campaña.",
+      "Busca un criterio por título (ej. 'Tono de voz alta') y devuelve categoria, tipo, peso y prompt. Usar campana='BBVA' para filtrar.",
     handlerKey: "buscar_criterio_campana",
     parameters: {
       type: "object",
@@ -461,7 +514,7 @@ const SALESCLOSER_TOOLS: SeedTool[] = [
   {
     name: "obtener_esquema_salescloser",
     description:
-      "Lista tablas y columnas de SalesCloser/Qontrol (calls, campaigns, users, etc.) para construir reportes SQL dinámicos.",
+      "PASO 1 OBLIGATORIO antes de SQL: devuelve tablas, columnas reales y patrones SQL de ejemplo. Siempre llamar primero en consultas analíticas o compuestas.",
     handlerKey: "obtener_esquema_salescloser",
     parameters: {
       type: "object",
@@ -473,7 +526,7 @@ const SALESCLOSER_TOOLS: SeedTool[] = [
   {
     name: "ejecutar_consulta_salescloser",
     description:
-      "Ejecuta un SELECT de solo lectura en SalesCloser y devuelve una muestra (vista previa antes de exportar Excel).",
+      "PASO 2: ejecuta SELECT de solo lectura en SalesCloser. Solo después de obtener_esquema_salescloser. Una consulta por cada parte del pedido. calls.id (no call_id), campaigns.name, supervisor_criteria.categoria.",
     handlerKey: "ejecutar_consulta_salescloser",
     parameters: {
       type: "object",
@@ -513,6 +566,7 @@ const SALESCLOSER_TOOLS: SeedTool[] = [
     },
   },
   POSTER_TOOL,
+  PRESENTATION_TOOL,
 ];
 
 async function main() {
@@ -665,33 +719,48 @@ async function main() {
       "obtener_reporte_estadisticas",
     ],
     reportes: {
-      recomendado: "exportar_excel_salescloser(query_sql) con SELECT personalizado",
-      ejemplo_nombres_llamadas: "SELECT customer_name AS nombre FROM calls ORDER BY created_at DESC",
-      esquema: "obtener_esquema_salescloser() si necesitas confirmar columnas",
+      flujo: "1) obtener_esquema_salescloser → 2) ejecutar_consulta_salescloser (una o más veces) → 3) exportar_excel si piden archivo",
+      ejemplo_compuesto: [
+        "SELECT customer_name FROM calls WHERE id = 166",
+        "SELECT sc.categoria FROM supervisor_criteria sc JOIN campaigns c ON c.id = sc.campaign_id WHERE sc.title ILIKE '%Tono de voz alta%' AND c.name ILIKE '%BBVA%'",
+        "SELECT c.name, COUNT(sc.id) cnt FROM campaigns c LEFT JOIN supervisor_criteria sc ON sc.campaign_id = c.id GROUP BY c.id, c.name HAVING COUNT(sc.id) < 10",
+      ],
+      sql_vs_crm: "ejecutar_consulta_salescloser = Qontrol. ejecutar_consulta_crm = CRM (otro proyecto).",
+      solo_lectura: "No hay tools de borrado ni UPDATE/DELETE.",
     },
   };
 
   const salesCloserPrompt = `Eres un asistente interno de SalesCloser / Qontrol.
-Respondes en español. Ayudas a supervisores y operadores a consultar llamadas, campañas, criterios de evaluación, transcripciones, evaluaciones, escalaciones y reportes Excel.
+Respondes en español. Consultas datos reales SOLO mediante herramientas.
 
-IMPORTANTE: Tú decides cuándo usar cada herramienta. Para datos reales SIEMPRE invoca la tool adecuada antes de responder.
-- Criterios de una campaña (ej. "¿qué criterios tiene BBVA?") → listar_criterios_campana(campana) sin prompts
-- Prompt de un criterio concreto (ej. "Tono de voz alta") → buscar_criterio_campana(nombre)
-- Resumen, score, criterios evaluados en una llamada → obtener_detalle_llamada(call_id, seccion)
-- Si piden UN solo dato (ej. "solo la campaña", "solo el agente") → obtener_detalle_llamada(call_id, seccion="campana"|"agente"|"score"|etc.) y responde brevemente solo eso
-- Solo transcripción → obtener_transcripcion_llamada
-- Buscar por fechas/cliente → buscar_llamadas
-- Excel / exportar / reporte personalizado → exportar_excel_salescloser(query_sql). Si no estás seguro de columnas → obtener_esquema_salescloser()
-- Vista previa de datos SQL → ejecutar_consulta_salescloser(query_sql)
-- Excel simple por fechas (plantilla fija) → reporte_llamadas_excel
+FLUJO PRINCIPAL (consultas con datos, reportes, listados, agregaciones):
+1. obtener_esquema_salescloser — SIEMPRE primero (columnas reales + patrones SQL)
+2. ejecutar_consulta_salescloser — uno o más SELECT según lo que pidió el usuario
+3. exportar_excel_salescloser — solo si piden Excel/archivo
 
-REGLAS DE REPORTES:
-1. NUNCA digas "el backend generará" ni expliques el proceso sin ejecutar la herramienta.
-2. Si piden Excel, DEBES llamar exportar_excel_salescloser (o reporte_llamadas_excel si solo piden fechas).
-3. Construye el SQL según lo pedido (ej. solo nombres → SELECT customer_name FROM calls).
-4. Cuando la tool devuelva url, inclúyela en la respuesta como enlace de descarga.
+EJEMPLO — pedido compuesto:
+"nombre llamada 166 + categoría criterio Tono de voz alta BBVA + campañas con menos de 10 criterios"
+→ Paso 1: obtener_esquema_salescloser()
+→ Paso 2a: SELECT customer_name FROM calls WHERE id = 166
+→ Paso 2b: SELECT sc.categoria, sc.title FROM supervisor_criteria sc JOIN campaigns c ON c.id = sc.campaign_id WHERE sc.title ILIKE '%Tono de voz alta%' AND c.name ILIKE '%BBVA%'
+→ Paso 2c: SELECT c.name, COUNT(sc.id) AS total FROM campaigns c LEFT JOIN supervisor_criteria sc ON sc.campaign_id = c.id AND sc.is_active GROUP BY c.id, c.name HAVING COUNT(sc.id) < 10
+→ Responde en viñetas con los resultados. NUNCA muestres SQL al usuario.
 
-Nunca inventes IDs, scores, prompts ni URLs. Resume los resultados de las tools en lenguaje claro para el usuario.`;
+REGLAS SQL:
+- calls.id (NO call_id), customer_name = nombre del cliente
+- campaigns.name (NO campana en esa tabla)
+- supervisor_criteria.categoria para categoría del criterio
+- Usa ILIKE para textos; JOIN campaigns ON campaigns.id = supervisor_criteria.campaign_id
+
+TOOLS AUXILIARES (solo si el caso es muy simple, ej. transcripción completa):
+- obtener_detalle_llamada(call_id, seccion) · obtener_transcripcion_llamada · listar_campanas
+
+SOLO LECTURA: no hay borrado ni modificación. Nunca digas "eliminado" sin tool de escritura.
+
+PRESENTACIONES: si piden PowerPoint, PPT, diapositivas o pitch → generar_presentacion (no poster).
+Si el usuario adjuntó imágenes, pásalas en archivos/imagenes. Si no subió ninguna, la tool usa fondos en degradado automáticamente.
+
+Nunca inventes datos. Si falta un resultado de consulta, ejecuta otra consulta — no adivines.`;
 
   const salesProject = await prisma.project.upsert({
     where: { id: "demo-salescloser" },
@@ -874,7 +943,7 @@ IMPORTANTE:
 
   await upsertProjectTools("demo-crm", CRM_TOOLS);
   await upsertProjectTools("demo-salescloser", SALESCLOSER_TOOLS);
-  await upsertProjectTools("demo-rrhh", [POSTER_TOOL]);
+  await upsertProjectTools("demo-rrhh", [POSTER_TOOL, PRESENTATION_TOOL]);
 }
 
 main()

@@ -58,6 +58,12 @@ def stream_sse_events(
     except APIConnectionError as error:
         yield _error_event(f"No se pudo conectar al servidor LLM: {error}")
         return
+    except InternalServerError as error:
+        yield _error_event(_map_llm_exception(error))
+        return
+    except Exception as error:
+        yield _error_event(_map_llm_exception(error))
+        return
 
     yield _sse_payload("done", model_used=model, message="".join(full))
 
@@ -68,9 +74,13 @@ async def stream_sse_events_async(
     vllm: dict[str, Any] | None = None,
 ) -> AsyncIterator[str]:
     yield _status_event("Generando respuesta...")
-    events = await asyncio.to_thread(
-        lambda: list(stream_sse_events(messages, system_prompt, vllm)),
-    )
+    try:
+        events = await asyncio.to_thread(
+            lambda: list(stream_sse_events(messages, system_prompt, vllm)),
+        )
+    except Exception as error:
+        yield _error_event(_map_llm_exception(error))
+        return
     for event in events:
         yield event
 
@@ -173,9 +183,18 @@ def _map_llm_exception(error: Exception) -> str:
     if isinstance(error, APIConnectionError):
         return f"No se pudo conectar al servidor LLM: {error}"
     if isinstance(error, InternalServerError):
+        detail = str(error).strip()
+        if "tool" in detail.lower() or "parser" in detail.lower():
+            return (
+                f"Error interno del servidor LLM: {error}. "
+                "Si usas tools, configura vLLM con "
+                "--enable-auto-tool-choice --tool-call-parser hermes."
+            )
         return (
-            f"El servidor LLM no soporta tool-calling en esta configuración: {error}. "
-            "En vLLM usa --enable-auto-tool-choice --tool-call-parser hermes."
+            f"El servidor vLLM respondió con error interno (500). "
+            f"{detail or 'Sin detalle.'} "
+            "Puede estar reiniciando, sin memoria GPU o con el modelo descargado. "
+            "Revisa el estado del servidor en Qontrol / server-monitor."
         )
     return str(error)
 

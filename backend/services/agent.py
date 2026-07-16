@@ -9,7 +9,15 @@ from openai import OpenAI
 from config import settings
 from services.agent_types import AgentHandoff, ImmediateResult, ProgressCallback, StreamHandoff
 from services.chat_context import messages_for_synthesis, truncate_tool_result
-from services.intent import message_needs_data_tools
+from services.intent import estimate_user_request_parts, message_needs_data_tools
+from services.sql_workflow import (
+    SCHEMA_TOOL,
+    message_needs_sql_workflow,
+    minimum_tool_steps,
+    needs_more_sql_steps,
+    schema_fetched,
+    tools_for_turn,
+)
 from services.synthesis import build_focused_synthesis_system
 from tools.registry import execute_tool
 
@@ -117,30 +125,47 @@ def _run_agent_loop(
             last_user_text = str(message.get("content", "")).strip()
             break
     requires_tools = bool(openai_tools) and message_needs_data_tools(last_user_text)
+    request_parts = estimate_user_request_parts(last_user_text) if requires_tools else 1
+    sql_workflow = message_needs_sql_workflow(last_user_text)
+    min_tool_steps = minimum_tool_steps(last_user_text) if sql_workflow else request_parts
 
     for _ in range(settings.max_tool_iterations):
-        if stream_handoff and executed_tools:
-            _emit_status(on_status, "Generando respuesta con los datos obtenidos...")
-            return StreamHandoff(
-                messages=messages_for_synthesis(messages),
-                system_prompt=build_focused_synthesis_system(
-                    system_prompt,
-                    messages,
-                    executed_tools,
-                ),
-                model_used=model,
-                tool_calls=executed_tools or None,
-                files=files or None,
+        if sql_workflow and not schema_fetched(executed_tools):
+            _emit_status(on_status, "Obteniendo esquema de tablas...")
+            logger.info("SQL workflow: auto-ejecutando %s", SCHEMA_TOOL)
+            raw_result = execute_tool(SCHEMA_TOOL, {})
+            result = truncate_tool_result(raw_result)
+            executed_tools.append(
+                {"name": SCHEMA_TOOL, "arguments": {}, "result": result},
             )
+            conversation.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "ESQUEMA SALESCLOSER ya consultado. Siguiente paso: "
+                        "ejecutar_consulta_salescloser(query_sql) con SELECT válido. "
+                        "Usa una consulta por cada parte del pedido.\n\n"
+                        f"{result}"
+                    ),
+                }
+            )
+            continue
 
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": conversation,
             "temperature": 0.2,
         }
-        if openai_tools:
-            kwargs["tools"] = openai_tools
-            if not executed_tools and requires_tools:
+        turn_tools = tools_for_turn(openai_tools, executed_tools, last_user_text)
+        if turn_tools:
+            kwargs["tools"] = turn_tools
+            if sql_workflow and not schema_fetched(executed_tools):
+                kwargs["tool_choice"] = "required"
+            elif requires_tools and (
+                not executed_tools or needs_more_sql_steps(last_user_text, executed_tools)
+                if sql_workflow
+                else len(executed_tools) < request_parts
+            ):
                 kwargs["tool_choice"] = "required"
             else:
                 kwargs["tool_choice"] = "auto"
@@ -210,13 +235,49 @@ def _run_agent_loop(
 
         final_message = choice.content or "Listo."
         if stream_handoff:
-            if executed_tools:
+            sql_ready = (
+                sql_workflow
+                and schema_fetched(executed_tools)
+                and len(executed_tools) >= min_tool_steps
+            )
+            generic_ready = not sql_workflow and len(executed_tools) >= request_parts
+            if executed_tools and (sql_ready or generic_ready):
+                _emit_status(on_status, "Generando respuesta con los datos obtenidos...")
                 return StreamHandoff(
-                    messages=_conversation_messages(conversation),
-                    system_prompt=system_prompt,
+                    messages=messages_for_synthesis(messages),
+                    system_prompt=build_focused_synthesis_system(
+                        system_prompt,
+                        messages,
+                        executed_tools,
+                    ),
                     model_used=model,
                     tool_calls=executed_tools or None,
                     files=files or None,
+                )
+            if executed_tools and len(executed_tools) < (
+                min_tool_steps if sql_workflow else request_parts
+            ):
+                logger.warning(
+                    "Pedido compuesto incompleto (%d/%d tools); delegando al planificador",
+                    len(executed_tools),
+                    min_tool_steps if sql_workflow else request_parts,
+                )
+                return ImmediateResult(
+                    message="",
+                    model_used=model,
+                    tool_calls=executed_tools or None,
+                    files=files or None,
+                )
+            if requires_tools:
+                logger.warning(
+                    "LLM respondió en texto sin invocar tools (stream_handoff); "
+                    "se delegará al planificador"
+                )
+                return ImmediateResult(
+                    message="",
+                    model_used=model,
+                    tool_calls=None,
+                    files=None,
                 )
             logger.warning(
                 "LLM respondió en texto sin invocar tools (stream_handoff); se delegará al planificador"

@@ -168,13 +168,55 @@ _DATA_TOOL_PATTERNS = (
     r"\bdime\b",
     r"\bobt[eé]n\b",
     r"\bobtener\b",
+    r"\bborra\b",
+    r"\belimina\b",
+    r"\bactualiza\b",
+    r"\bmodifica\b",
     r"\bposter\b",
     r"\bcartel\b",
     r"\bimagen\b",
     r"\baviso\s+visual\b",
     r"\bcomunicado\b",
     r"\b(?:crea|genera|haz).{0,20}(?:poster|cartel|imagen)\b",
+    r"\bpresentaci[oó]n\b",
+    r"\bdiapositivas?\b",
+    r"\bpowerpoint\b",
+    r"\bpptx?\b",
+    r"\bpitch\s+deck\b",
+    r"\b(?:crea|genera|haz).{0,24}(?:presentaci[oó]n|diapositivas?|powerpoint|ppt)\b",
 )
+
+
+def estimate_user_request_parts(text: str) -> int:
+    """Heurística: cuántos pedidos distintos trae un mensaje (para forzar multi-tool)."""
+    lowered = text.lower().strip()
+    if not lowered:
+        return 1
+    parts = 1
+    for pattern in (
+        r"\bademás\b",
+        r"\btambién\b",
+        r"\by\s+dame\b",
+        r"\by\s+la\b",
+        r"\by\s+las\b",
+        r"\by\s+el\b",
+        r"\by\s+los\b",
+        r";",
+        r"\n\s*[-*•]\s+",
+    ):
+        parts += len(re.findall(pattern, lowered))
+    return min(max(parts, 1), 5)
+
+
+def message_is_destructive_mutation(text: str) -> bool:
+    """True si pide borrar, eliminar o modificar datos (no hay tools de escritura)."""
+    lowered = text.lower().strip()
+    return bool(
+        re.search(
+            r"\b(borra|borrar|elimina|eliminar|delete|actualiza|modifica|quita|remueve)\b",
+            lowered,
+        )
+    )
 
 
 def message_needs_data_tools(text: str) -> bool:

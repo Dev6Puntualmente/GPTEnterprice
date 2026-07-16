@@ -41,14 +41,50 @@ CORE_TABLES = (
 )
 
 TABLE_HINTS: dict[str, str] = {
-    "calls": "Llamadas/auditorías. Claves: id, customer_name, customer_document, agent_id, campaign_id, campana, channel, is_flagged, created_at.",
-    "campaigns": "Campañas. Claves: id, name, description, parent_id, is_active.",
-    "users": "Agentes/usuarios. Claves: id, name, email.",
-    "call_evaluations": "Evaluaciones IA. Claves: call_id, compliance_score, data.",
-    "call_transcripts": "Transcripciones. Claves: call_id, content.",
-    "escalations": "Escalaciones. Claves: id, call_id, status, level, reason, created_at.",
-    "supervisor_criteria": "Criterios de campaña. Claves: id, campaign_id, title, prompt, weight, is_active.",
+    "calls": "Llamadas. PK: id (NO usar call_id). Nombre cliente: customer_name. FK campaña: campaign_id.",
+    "campaigns": "Campañas. PK: id. Nombre: name (NO campana). Activa: is_active.",
+    "users": "Agentes. PK: id. Nombre: name, email.",
+    "call_evaluations": "Evaluaciones IA por llamada. FK: call_id → calls.id.",
+    "call_transcripts": "Transcripciones. FK: call_id → calls.id.",
+    "escalations": "Escalaciones. FK: call_id → calls.id.",
+    "supervisor_criteria": "Criterios de campaña. FK: campaign_id → campaigns.id. Título: title. Categoría: categoria.",
 }
+
+SQL_PATTERNS: list[dict[str, str]] = [
+    {
+        "caso": "Nombre de una llamada por id",
+        "sql": "SELECT id, customer_name FROM calls WHERE id = 166",
+    },
+    {
+        "caso": "Categoría de un criterio por título y campaña",
+        "sql": (
+            "SELECT sc.title, sc.categoria, camp.name AS campana "
+            "FROM supervisor_criteria sc "
+            "JOIN campaigns camp ON camp.id = sc.campaign_id "
+            "WHERE sc.title ILIKE '%Tono de voz alta%' AND camp.name ILIKE '%BBVA%'"
+        ),
+    },
+    {
+        "caso": "Campañas con menos de N criterios activos",
+        "sql": (
+            "SELECT camp.id, camp.name, COUNT(sc.id) AS total_criterios "
+            "FROM campaigns camp "
+            "LEFT JOIN supervisor_criteria sc ON sc.campaign_id = camp.id AND sc.is_active = TRUE "
+            "GROUP BY camp.id, camp.name "
+            "HAVING COUNT(sc.id) < 10 "
+            "ORDER BY total_criterios, camp.name"
+        ),
+    },
+    {
+        "caso": "JOIN llamada con campaña",
+        "sql": (
+            "SELECT c.id, c.customer_name, camp.name AS campana "
+            "FROM calls c "
+            "LEFT JOIN campaigns camp ON camp.id = c.campaign_id "
+            "WHERE c.id = 166"
+        ),
+    },
+]
 
 
 def _validate_readonly_query(query_sql: str) -> str | None:
@@ -117,12 +153,22 @@ def obtener_esquema_salescloser(tabla: str | None = None) -> dict[str, Any]:
         "success": True,
         "total_tablas": len(tablas),
         "tablas": tablas,
-        "notas": [
-            "Tabla principal de llamadas: calls (customer_name = nombre del cliente).",
-            "Para campaña por nombre usa JOIN campaigns c ON c.id = calls.campaign_id.",
-            "Solo SELECT; para Excel usa exportar_excel_salescloser(query_sql).",
+        "flujo_obligatorio": [
+            "1) obtener_esquema_salescloser (esta llamada)",
+            "2) ejecutar_consulta_salescloser(query_sql) — una o más consultas según el pedido",
+            "3) exportar_excel_salescloser solo si piden archivo Excel",
         ],
-        "mensaje": f"Esquema obtenido ({len(tablas)} tabla(s)).",
+        "patrones_sql": SQL_PATTERNS,
+        "notas": [
+            "calls.id es la PK de llamadas (NO existe calls.call_id).",
+            "campaigns.name es el nombre de campaña (NO campaigns.campana).",
+            "supervisor_criteria.categoria existe para categoría del criterio.",
+            "Solo SELECT. Usa ILIKE para búsquedas por texto.",
+        ],
+        "mensaje": (
+            f"Esquema obtenido ({len(tablas)} tabla(s)). "
+            "Ahora arma SELECT con estas columnas y llama ejecutar_consulta_salescloser."
+        ),
     }
 
 
@@ -139,7 +185,17 @@ def ejecutar_consulta_salescloser(query_sql: str, limite: int | str | float = 10
     limite = max(1, min(limite, 500))
 
     wrapped = f"SELECT * FROM ({query_sql.strip().rstrip(';')}) AS q LIMIT {limite}"
-    rows = fetch_all(wrapped)
+    try:
+        rows = fetch_all(wrapped)
+    except Exception as exc:
+        err = str(exc)
+        hint = (
+            "Columnas comunes: calls.id (no call_id), calls.customer_name, campaigns.name. "
+            "Usa obtener_esquema_salescloser(tabla='calls') antes de SQL complejo."
+        )
+        if "does not exist" in err.lower() or "no existe" in err.lower():
+            return {"success": False, "error": f"Error SQL: {err}", "sugerencia": hint}
+        return {"success": False, "error": f"Error SQL: {err}"}
     return {
         "success": True,
         "total_muestra": len(rows),

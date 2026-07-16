@@ -526,13 +526,30 @@ def _format_tool_result(
                 lines.append(f"  Prompt: {str(item.get('prompt'))[:300]}")
         return prefix + "\n".join(lines)
 
+    if tool == "listar_campanas_con_pocos_criterios":
+        if not data.get("success"):
+            return prefix + (data.get("mensaje") or "No pude listar campañas.")
+        lines = [
+            f"**{data.get('mensaje')}** (umbral < {data.get('maximo_criterios', 10)})\n",
+        ]
+        for row in data.get("campanas") or []:
+            estado = "activa" if row.get("activa") else "inactiva"
+            lines.append(
+                f"- **{row.get('nombre')}** ({estado}) — "
+                f"{row.get('total_criterios', 0)} criterio(s) · id {row.get('id')}"
+            )
+        return prefix + "\n".join(lines)
+
     if tool == "buscar_criterio_campana":
         if not data.get("success"):
             return prefix + (data.get("mensaje") or "No encontré ese criterio.")
         if data.get("criterio"):
             item = data["criterio"]
+            categoria = item.get("categoria") or "N/D"
             return prefix + (
-                f"**{item.get('titulo')}** — campaña **{item.get('campana')}**\n\n"
+                f"**{item.get('titulo')}** — campaña **{item.get('campana')}**\n"
+                f"- Categoría: **{categoria}**\n"
+                f"- Tipo: {item.get('tipo', 'N/D')} · peso {item.get('peso', 'N/D')}\n\n"
                 f"{item.get('prompt', 'Sin prompt')}"
             )
         lines = [f"**{data.get('mensaje')}**\n"]
@@ -565,9 +582,19 @@ def _format_tool_result(
         lines = [f"**{data.get('mensaje', 'Esquema SalesCloser')}**\n"]
         for table in data.get("tablas") or []:
             cols = ", ".join(
-                str(col.get("columna")) for col in (table.get("columnas") or [])[:12]
+                str(col.get("columna")) for col in (table.get("columnas") or [])[:14]
             )
+            desc = table.get("descripcion") or ""
             lines.append(f"- **{table.get('nombre')}**: {cols}")
+            if desc:
+                lines.append(f"  _{desc}_")
+        patterns = data.get("patrones_sql") or []
+        if patterns:
+            lines.append("\n**Patrones SQL de referencia:**")
+            for pattern in patterns[:4]:
+                lines.append(f"- {pattern.get('caso')}: `{pattern.get('sql')}`")
+        for note in data.get("notas") or []:
+            lines.append(f"- {note}")
         return prefix + "\n".join(lines)
 
     if tool == "listar_escalaciones":
@@ -834,6 +861,22 @@ def _format_tool_result(
             lines.append(f"\n_{aviso}_")
         return prefix + "\n".join(lines)
 
+    if tool == "generar_presentacion":
+        if not data.get("success"):
+            return prefix + (data.get("mensaje") or "No pude generar la presentación.")
+        fondo = data.get("fondo") or "degradados"
+        lines = [
+            f"**Presentación {str(data.get('formato', 'pptx')).upper()} generada**\n",
+            f"_Fondo visual: {fondo}_",
+        ]
+        if data.get("url"):
+            lines.append(f"**Descargar:** {data['url']}")
+        if data.get("editar_url"):
+            lines.append(f"**Editar en Presenton:** {data['editar_url']}")
+        if data.get("presentation_id"):
+            lines.append(f"_ID: {data['presentation_id']}_")
+        return prefix + "\n".join(lines)
+
     if tool == "ejecutar_consulta_crm":
         if not data.get("success"):
             return prefix + f"No pude ejecutar la consulta: {data.get('error', 'error desconocido')}"
@@ -986,6 +1029,26 @@ def detect_sync_tool_intent(
         elif re.search(r"aviso", text, re.IGNORECASE):
             poster_args["tema"] = "aviso"
         return {"tool": "generar_poster_alerta", "args": poster_args, "user_text": text}
+
+    if "generar_presentacion" in allowed and re.search(
+        r"(?:crea|genera|haz).{0,24}(?:presentaci[oó]n|diapositivas?|powerpoint|pptx?)"
+        r"|\bpresentaci[oó]n\b|\bdiapositivas?\b|\bpowerpoint\b|\bpptx?\b|\bpitch\s+deck\b",
+        text,
+        re.IGNORECASE,
+    ):
+        slides_match = re.search(r"(\d{1,2})\s*(?:diapositivas?|slides?)", text, re.IGNORECASE)
+        num_slides = int(slides_match.group(1)) if slides_match else 8
+        export_as = "pdf" if re.search(r"\bpdf\b", text, re.IGNORECASE) else "pptx"
+        return {
+            "tool": "generar_presentacion",
+            "args": {
+                "contenido": text.strip(),
+                "num_diapositivas": num_slides,
+                "idioma": "Spanish",
+                "formato": export_as,
+            },
+            "user_text": text,
+        }
 
     current_scores = _current_tool_scores(text, allowed)
     call_id = _resolve_call_id(text, messages, current_scores)

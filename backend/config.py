@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
     max_tool_iterations: int = 5
     vllm_tools_enabled: bool = False
+    # Presenton (presentaciones PPTX/PDF self-hosted)
+    presenton_url: str | None = None
+    presenton_username: str | None = None
+    presenton_password: str | None = None
+    presenton_default_template: str | None = None
     # Si false, no intenta tool-calling nativo en vLLM (útil con parser hermes pendiente).
     vllm_native_tools: bool = True
     # Si false (default cuando vllm_tools_enabled=true), el LLM elige tools; no regex sync.

@@ -1019,7 +1019,7 @@ def listar_criterios_campana(
     """
     active_only = _parse_bool(solo_activos, True)
     include_inherited = _parse_bool(incluir_heredados, True)
-    with_prompt = _parse_bool(incluir_prompt, True)
+    with_prompt = _parse_bool(incluir_prompt, False)
 
     campaign, candidates = _resolve_campaign(campana=campana, campana_id=campana_id)
     if not campaign:
@@ -1168,6 +1168,80 @@ def buscar_criterio_campana(
         "total": len(criterios),
         "criterios": criterios,
         "mensaje": f"Encontré {len(criterios)} criterio(s) que coinciden con '{query_name}'",
+    }
+
+
+def listar_campanas_con_pocos_criterios(
+    maximo: int | str | float = 10,
+    solo_activas: bool | str = True,
+    incluir_heredados: bool | str = True,
+    limite: int | str | float = 50,
+) -> dict[str, Any]:
+    """
+    Campañas con menos de N criterios de evaluación (propios + heredados si aplica).
+  """
+    try:
+        maximo = int(float(maximo))
+    except (ValueError, TypeError):
+        maximo = 10
+    maximo = max(1, min(maximo, 100))
+
+    try:
+        limite = int(float(limite))
+    except (ValueError, TypeError):
+        limite = 50
+    limite = max(1, min(limite, 100))
+
+    active_only = _parse_bool(solo_activas, True)
+    include_inherited = _parse_bool(incluir_heredados, True)
+
+    conditions: list[str] = []
+    if active_only:
+        conditions.append("is_active = TRUE")
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    campaigns = fetch_all(
+        f"""
+        SELECT id, name, is_active, parent_id, inherits_parent_criteria
+        FROM campaigns
+        {where}
+        ORDER BY name
+        LIMIT %s
+        """,
+        (limite * 3,),
+    )
+
+    matches: list[dict[str, Any]] = []
+    for camp in campaigns:
+        criteria = _fetch_effective_campaign_criteria(
+            int(camp["id"]),
+            active_only=active_only,
+            include_inherited=include_inherited,
+        )
+        total = len(criteria)
+        if total < maximo:
+            matches.append(
+                {
+                    "id": camp.get("id"),
+                    "nombre": camp.get("name"),
+                    "activa": camp.get("is_active"),
+                    "total_criterios": total,
+                }
+            )
+        if len(matches) >= limite:
+            break
+
+    matches.sort(key=lambda row: (row.get("total_criterios", 0), str(row.get("nombre", ""))))
+
+    return {
+        "success": True,
+        "maximo_criterios": maximo,
+        "incluye_heredados": include_inherited,
+        "total": len(matches),
+        "campanas": matches,
+        "mensaje": (
+            f"Encontré {len(matches)} campaña(s) con menos de {maximo} criterio(s)"
+        ),
     }
 
 

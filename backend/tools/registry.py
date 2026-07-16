@@ -174,6 +174,7 @@ from tools.salescloser import (
     buscar_criterio_campana,
     buscar_llamadas,
     listar_campanas,
+    listar_campanas_con_pocos_criterios,
     listar_criterios_campana,
     listar_escalaciones,
     obtener_detalle_llamada,
@@ -188,6 +189,7 @@ from tools.salescloser_reports import (
 )
 from tools.reports import obtener_reporte_estadisticas
 from tools.poster import generar_estructura_poster, generar_poster_alerta
+from tools.presenton import generar_presentacion
 from tools.crm import (
     ejecutar_consulta_crm,
     crm_buscar_clientes,
@@ -216,6 +218,7 @@ TOOL_HANDLERS = {
     "buscar_usuario": buscar_usuario,
     # ── SalesCloser / Qontrol ─────────────────────────────────────────────────
     "listar_campanas": listar_campanas,
+    "listar_campanas_con_pocos_criterios": listar_campanas_con_pocos_criterios,
     "listar_criterios_campana": listar_criterios_campana,
     "buscar_criterio_campana": buscar_criterio_campana,
     "buscar_llamadas": buscar_llamadas,
@@ -247,21 +250,23 @@ TOOL_HANDLERS = {
     # ── Experimental ──────────────────────────────────────────────────────────
     "generar_poster_alerta": generar_poster_alerta,
     "generar_estructura_poster": generar_estructura_poster,
+    "generar_presentacion": generar_presentacion,
 }
 
 TOOL_CATALOG = {
     "generar_reporte_excel": "Demo RRHH — Excel de usuarios por rango horario",
     "buscar_usuario": "Demo RRHH — Buscar hora de entrada de un usuario",
     "listar_campanas": "SalesCloser — Listar campañas activas",
+    "listar_campanas_con_pocos_criterios": "SalesCloser — Campañas con menos de N criterios (ej. menos de 10)",
     "listar_criterios_campana": "SalesCloser — Criterios de evaluación de una campaña (por nombre, ej. BBVA)",
-    "buscar_criterio_campana": "SalesCloser — Buscar criterio por título y obtener su prompt (ej. Tono de voz alta)",
+    "buscar_criterio_campana": "SalesCloser — Buscar criterio por título; devuelve categoria, tipo y prompt",
     "buscar_llamadas": "SalesCloser — Buscar llamadas por fecha, campaña o cliente",
     "obtener_transcripcion_llamada": "SalesCloser — Obtener transcripción de una llamada",
     "obtener_detalle_llamada": "Qontrol — Detalle de llamada; usa seccion para un solo campo (campana, agente, score, etc.)",
     "resumen_evaluacion_llamada": "SalesCloser — Score y evaluación IA de una llamada",
     "reporte_llamadas_excel": "SalesCloser — Excel llamadas (plantilla; si el rango está vacío exporta todas)",
-    "obtener_esquema_salescloser": "SalesCloser — Esquema de tablas/columnas para armar reportes SQL",
-    "ejecutar_consulta_salescloser": "SalesCloser — Ejecutar SELECT de lectura (vista previa)",
+    "obtener_esquema_salescloser": "SalesCloser — PASO 1: esquema de tablas/columnas (obligatorio antes de SQL)",
+    "ejecutar_consulta_salescloser": "SalesCloser — PASO 2: ejecutar SELECT de lectura (tras esquema)",
     "exportar_excel_salescloser": "SalesCloser — PRINCIPAL: Excel desde SELECT personalizado (ej. solo nombres)",
     "listar_escalaciones": "SalesCloser — Ver escalaciones por estado",
     "obtener_reporte_estadisticas": "SalesCloser — Reporte agregado con estadísticas de llamadas",
@@ -282,6 +287,7 @@ TOOL_CATALOG = {
     "crm_reporte_estados_agentes": "CRM — Auditoría de estados de agentes",
     "generar_poster_alerta": "[EXPERIMENTAL] Poster PNG parametrizable (colores, tamaños, secciones)",
     "generar_estructura_poster": "[EXPERIMENTAL] Igual que generar_poster_alerta (esquema estructurado)",
+    "generar_presentacion": "Presenton — Genera presentación PPTX/PDF (API self-hosted)",
 }
 
 

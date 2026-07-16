@@ -106,6 +106,13 @@ def run_chat_with_tools_handoff(
                 )
                 return result
 
+            if isinstance(result, ImmediateResult) and not result.tool_calls and result.message:
+                logger.warning(
+                    "LLM respondió sin tools con mensaje directo; usando planificador LLM"
+                )
+            elif isinstance(result, ImmediateResult) and not result.tool_calls:
+                logger.warning("tool-calling nativo no invocó herramientas; usando planificador LLM")
+
             if isinstance(result, dict) and result.get("tool_calls"):
                 native_used_tools = True
                 logger.info(

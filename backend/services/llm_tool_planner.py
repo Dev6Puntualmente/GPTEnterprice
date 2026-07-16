@@ -8,6 +8,13 @@ from typing import Any
 from services.agent import run_agent
 from services.agent_types import AgentHandoff, ImmediateResult, ProgressCallback, StreamHandoff
 from services.synthesis import build_synthesis_system
+from services.intent import estimate_user_request_parts
+from services.sql_workflow import (
+    SCHEMA_TOOL,
+    message_needs_sql_workflow,
+    minimum_tool_steps,
+    schema_fetched,
+)
 from services.sync_tools import run_sync_tool
 
 logger = logging.getLogger("gptenterprice.agent")
@@ -15,13 +22,20 @@ logger = logging.getLogger("gptenterprice.agent")
 _PLANNER_INSTRUCTIONS = """
 Eres un agente con herramientas (function calling). El usuario pide datos o acciones del sistema.
 
-REGLAS OBLIGATORIAS:
+_REGLAS OBLIGATORIAS:
 1. Si la pregunta requiere datos reales del CRM, llamadas, reportes, etc. → DEBES usar una herramienta.
 2. NUNCA escribas SQL ni pseudo-código en la respuesta final. NUNCA expliques "puedes usar la función X" — EJECÚTALA tú.
-3. Si piden Excel, exportar o reporte → exportar_excel_salescloser(query_sql). Si no conoces columnas → obtener_esquema_salescloser.
-4. Si piden poster, cartel, imagen o aviso visual → generar_poster_alerta (titulo, colores hex, ancho/alto, secciones). Genera PNG, no HTML.
-5. NUNCA digas que "el backend generará" un archivo sin action tool.
-6. Responde ÚNICAMENTE con un JSON válido en una sola línea (sin markdown):
+3. Si el usuario pide VARIAS cosas o datos analíticos → flujo OBLIGATORIO:
+   a) obtener_esquema_salescloser (si no está en datos ya obtenidos)
+   b) ejecutar_consulta_salescloser — una consulta SELECT por cada parte del pedido
+4. NUNCA inventes columnas: calls.id (no call_id), campaigns.name (no campana), supervisor_criteria.categoria.
+5. Campañas con menos de N criterios → SQL con GROUP BY + HAVING COUNT(...) < N.
+6. Si piden Excel → exportar_excel_salescloser(query_sql) después del esquema.
+7. Si piden poster → generar_poster_alerta.
+8. Si piden presentación / PowerPoint / PPT / diapositivas → generar_presentacion.
+   Imágenes del usuario en archivos/imagenes; sin imágenes → fondos en degradado (no API externa).
+9. NUNCA digas que "el backend generará" un archivo sin action tool.
+10. Responde ÚNICAMENTE con JSON válido en una sola línea:
 
 Para ejecutar herramienta:
 {"action":"tool","tool":"<nombre_exacto>","args":{...}}
@@ -166,6 +180,15 @@ def _synthesize_handoff(
     return handoff
 
 
+def _format_executed_for_planner(executed: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    for item in executed:
+        name = item.get("name", "tool")
+        result = str(item.get("result", ""))[:1200]
+        lines.append(f"### {name}\n{result}")
+    return "\n\n".join(lines)
+
+
 def run_llm_tool_planner(
     messages: list[dict[str, Any]],
     system_prompt: str,
@@ -198,80 +221,144 @@ def run_llm_tool_planner(
     from services.chat_context import slim_system_prompt
 
     slim_project = slim_system_prompt(system_prompt.strip(), drop_project_context=True)
-    full_system = f"{planner_system.strip()}\n\n---\nContexto del proyecto:\n{slim_project}"
+    base_system = f"{planner_system.strip()}\n\n---\nContexto del proyecto:\n{slim_project}"
 
-    if on_status:
-        on_status("El modelo está eligiendo la herramienta adecuada...")
-    logger.info("LLM planificador: eligiendo herramienta entre %d tools", len(allowed))
-    plan = run_agent(messages=messages, system_prompt=full_system, tools=None, vllm=vllm)
-    parsed = _extract_json_object(plan.get("message") or "") if isinstance(plan, dict) else None
+    user_text = _last_user_text(messages)
+    sql_workflow = message_needs_sql_workflow(user_text)
+    request_parts = estimate_user_request_parts(user_text)
+    max_steps = min(max(minimum_tool_steps(user_text), 2) if sql_workflow else max(request_parts, 2), 6)
 
-    if not parsed:
-        logger.warning("LLM planificador no devolvió JSON; reintento estricto")
+    executed_tool_calls: list[dict[str, Any]] = []
+    executed_messages: list[str] = []
+    all_files: list[str] = []
+    model_used = "planner"
+
+    if sql_workflow and not schema_fetched(executed_tool_calls):
         if on_status:
-            on_status("Reintentando selección de herramienta...")
-        retry_system = (
-            full_system
-            + "\n\nIMPORTANTE: Tu respuesta anterior no fue JSON válido. "
-            'Responde SOLO con {"action":"tool",...} o {"action":"answer",...}'
+            on_status("Obteniendo esquema de tablas...")
+        logger.info("SQL workflow planificador: auto-ejecutando %s", SCHEMA_TOOL)
+        schema_result = run_sync_tool(
+            {"tool": SCHEMA_TOOL, "args": {}, "user_text": user_text},
+            messages,
         )
-        plan = run_agent(messages=messages, system_prompt=retry_system, tools=None, vllm=vllm)
+        executed_messages.append(str(schema_result.get("message") or ""))
+        for call in schema_result.get("tool_calls") or []:
+            executed_tool_calls.append(call)
+
+    for step in range(max_steps):
+        step_context = ""
+        if executed_tool_calls:
+            step_context = (
+                "\n\n---\nDatos ya obtenidos en este turno:\n"
+                f"{_format_executed_for_planner(executed_tool_calls)}\n\n"
+            )
+            if sql_workflow and schema_fetched(executed_tool_calls):
+                step_context += (
+                    "El esquema ya está disponible. Usa SOLO ejecutar_consulta_salescloser "
+                    "con SELECT válido (una consulta por cada parte del pedido). "
+                    'JSON: {"action":"tool","tool":"ejecutar_consulta_salescloser","args":{"query_sql":"..."}}'
+                )
+            else:
+                step_context += (
+                    "Si AÚN faltan datos, elige la SIGUIENTE herramienta con action:tool."
+                )
+        full_system = base_system + step_context
+
+        if on_status:
+            on_status(
+                f"El modelo elige herramienta ({step + 1}/{max_steps})..."
+                if step == 0
+                else f"Siguiente herramienta ({step + 1}/{max_steps})..."
+            )
+        logger.info("LLM planificador paso %d/%d", step + 1, max_steps)
+        plan = run_agent(messages=messages, system_prompt=full_system, tools=None, vllm=vllm)
+        if isinstance(plan, dict) and plan.get("model_used"):
+            model_used = str(plan["model_used"])
         parsed = _extract_json_object(plan.get("message") or "") if isinstance(plan, dict) else None
 
-    if not parsed:
+        if not parsed:
+            logger.warning("LLM planificador no devolvió JSON en paso %d", step + 1)
+            if step == 0:
+                retry_system = (
+                    full_system
+                    + "\n\nIMPORTANTE: Responde SOLO con "
+                    '{"action":"tool",...} o {"action":"answer",...}'
+                )
+                plan = run_agent(messages=messages, system_prompt=retry_system, tools=None, vllm=vllm)
+                parsed = _extract_json_object(plan.get("message") or "") if isinstance(plan, dict) else None
+            if not parsed:
+                break
+
+        action = str(parsed.get("action", "")).lower()
+        if action == "answer":
+            if executed_tool_calls:
+                break
+            message = str(parsed.get("message") or "").strip()
+            return ImmediateResult(
+                message=message or "Listo.",
+                model_used=model_used,
+            )
+
+        if action != "tool":
+            break
+
+        tool_name = str(parsed.get("tool") or "").strip()
+        args = parsed.get("args") if isinstance(parsed.get("args"), dict) else {}
+        if tool_name not in allowed:
+            logger.warning("LLM eligió tool no permitida: %s", tool_name)
+            break
+
+        logger.info("LLM planificador paso %d: %s args=%s", step + 1, tool_name, args)
+        if on_status:
+            on_status(f"Ejecutando {tool_name.replace('_', ' ')}...")
+        intent = {"tool": tool_name, "args": args, "user_text": user_text}
+        sync_result = run_sync_tool(intent, messages)
+        if on_status:
+            on_status(f"Listo: {tool_name.replace('_', ' ')}")
+
+        executed_messages.append(str(sync_result.get("message") or ""))
+        for call in sync_result.get("tool_calls") or []:
+            executed_tool_calls.append(call)
+        for file_url in sync_result.get("files") or []:
+            if file_url not in all_files:
+                all_files.append(file_url)
+
+        target_steps = minimum_tool_steps(user_text) if sql_workflow else request_parts
+        if len(executed_tool_calls) >= target_steps:
+            break
+
+    if not executed_tool_calls:
         return ImmediateResult(
             message=(
-                "No pude interpretar qué herramienta usar. "
-                "Reformula tu pedido o verifica que el servidor vLLM tenga "
-                "--tool-call-parser hermes para tool-calling nativo."
+                "No pude ejecutar las herramientas necesarias. "
+                "Reformula tu pedido o verifica tool-calling nativo (--tool-call-parser hermes)."
             ),
-            model_used=plan.get("model_used") if isinstance(plan, dict) else "planner",
+            model_used=model_used,
         )
 
-    action = str(parsed.get("action", "")).lower()
-    if action == "answer":
-        message = str(parsed.get("message") or "").strip()
-        return ImmediateResult(
-            message=message or "Listo.",
-            model_used=plan.get("model_used") if isinstance(plan, dict) else "planner",
-        )
-
-    if action != "tool":
-        return ImmediateResult(
-            message="Respuesta del planificador inválida. Intenta de nuevo.",
-            model_used=plan.get("model_used") if isinstance(plan, dict) else "planner",
-        )
-
-    tool_name = str(parsed.get("tool") or "").strip()
-    args = parsed.get("args") if isinstance(parsed.get("args"), dict) else {}
-
-    if tool_name not in allowed:
-        logger.warning("LLM eligió tool no permitida: %s", tool_name)
-        return ImmediateResult(
-            message=f"El modelo eligió una herramienta no disponible: `{tool_name}`. Intenta de nuevo.",
-            model_used=plan.get("model_used") if isinstance(plan, dict) else "planner",
-        )
-
-    logger.info("LLM planificador eligió: %s args=%s", tool_name, args)
-    if on_status:
-        on_status(f"Ejecutando {tool_name.replace('_', ' ')}...")
-    user_text = _last_user_text(messages)
-    intent = {"tool": tool_name, "args": args, "user_text": user_text}
-    sync_result = run_sync_tool(intent, messages)
-    if on_status:
-        on_status(f"Listo: {tool_name.replace('_', ' ')}")
+    combined_message = "\n\n".join(msg for msg in executed_messages if msg.strip())
+    sync_meta = {
+        "tool_calls": executed_tool_calls,
+        "files": all_files or None,
+    }
     if stream_handoff:
-        return _synthesize_handoff(
-            messages,
-            system_prompt,
-            sync_result["message"],
-            vllm,
-            sync_meta=sync_result,
+        from services.synthesis import build_focused_synthesis_system
+
+        return StreamHandoff(
+            messages=messages,
+            system_prompt=build_focused_synthesis_system(
+                system_prompt,
+                messages,
+                executed_tool_calls,
+            ),
+            model_used=model_used,
+            tool_calls=executed_tool_calls,
+            files=all_files or None,
         )
     return _synthesize_with_llm(
         messages,
         system_prompt,
-        sync_result["message"],
+        combined_message,
         vllm,
-        sync_meta=sync_result,
+        sync_meta=sync_meta,
     )
