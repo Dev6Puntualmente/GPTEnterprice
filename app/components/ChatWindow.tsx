@@ -8,6 +8,7 @@ import ParticleField from "@/app/components/ui/ParticleField";
 import { useTheme } from "@/app/components/theme/ThemeProvider";
 import type { BackgroundJob, MessageMetadata } from "@/lib/types";
 import { looksLikePresentationRequest } from "@/lib/chat-intent";
+import { acquireAgentBusy } from "@/lib/agent-busy";
 import { ThinkingIndicator } from "@/app/components/chat/ThinkingIndicator";
 
 function looksLikeToolRequest(text: string): boolean {
@@ -212,7 +213,15 @@ export function ChatWindow({
   }, []);
 
   const visibleMessages = conversation?.messages.filter((m) => m.role !== "TOOL") ?? [];
-  const isBusy = loading || streamPhase !== "idle";
+  const hasActiveJobs = Object.values(jobStates).some(
+    (job) => job?.status === "RUNNING" || job?.status === "PENDING",
+  );
+  const isBusy = loading || streamPhase !== "idle" || hasActiveJobs;
+
+  useEffect(() => {
+    if (!isBusy) return;
+    return acquireAgentBusy();
+  }, [isBusy]);
 
   const flushPendingTokens = useCallback(() => {
     if (!pendingTokensRef.current) return;
