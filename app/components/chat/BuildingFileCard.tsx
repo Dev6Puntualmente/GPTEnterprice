@@ -1,8 +1,10 @@
 "use client";
 
 import { motion } from "framer-motion";
+import { DownloadFileButton } from "@/app/components/chat/DownloadFileButton";
 import { useTheme } from "@/app/components/theme/ThemeProvider";
 import type { BackgroundJobSnapshot } from "@/lib/types";
+import { normalizeDownloadUrl } from "@/lib/download-url";
 
 type BuildingFileCardProps = {
   job: BackgroundJobSnapshot;
@@ -96,19 +98,7 @@ export function BuildingFileCard({
 
       {fileUrl ? (
         <div className="border-t px-4 py-3" style={{ borderColor: colors.border }}>
-          <a
-            href={fileUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium transition hover:opacity-90"
-            style={{
-              background: `${colors.success}18`,
-              color: colors.success,
-              border: `1px solid ${colors.success}33`,
-            }}
-          >
-            Descargar Excel
-          </a>
+          <DownloadFileButton url={normalizeDownloadUrl(fileUrl)} label="Descargar Excel" />
         </div>
       ) : null}
     </motion.div>

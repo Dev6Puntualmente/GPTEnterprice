@@ -12,7 +12,13 @@ type Particle = {
   alpha: number;
 };
 
-export default function ParticleField({ density = 48 }: { density?: number }) {
+export default function ParticleField({
+  density = 48,
+  particleScale = 1,
+}: {
+  density?: number;
+  particleScale?: number;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const { mode, colors } = useTheme();
 
@@ -47,7 +53,7 @@ export default function ParticleField({ density = 48 }: { density?: number }) {
         y: Math.random() * height,
         vx: (Math.random() - 0.5) * 0.35,
         vy: (Math.random() - 0.5) * 0.35,
-        r: Math.random() * 1.8 + 0.6,
+        r: (Math.random() * 1.8 + 0.6) * particleScale,
         alpha: Math.random() * 0.35 + 0.15,
       }));
     };
@@ -76,12 +82,12 @@ export default function ParticleField({ density = 48 }: { density?: number }) {
           const dx = p.x - q.x;
           const dy = p.y - q.y;
           const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < 110) {
+          if (dist < 110 * particleScale) {
             ctx.beginPath();
             ctx.moveTo(p.x, p.y);
             ctx.lineTo(q.x, q.y);
-            ctx.strokeStyle = `rgba(${line}, ${0.08 * (1 - dist / 110)})`;
-            ctx.lineWidth = 0.6;
+            ctx.strokeStyle = `rgba(${line}, ${0.08 * (1 - dist / (110 * particleScale))})`;
+            ctx.lineWidth = 0.6 * particleScale;
             ctx.stroke();
           }
         }
@@ -104,7 +110,7 @@ export default function ParticleField({ density = 48 }: { density?: number }) {
       cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, [density, mode, colors.accent]);
+  }, [density, mode, colors.accent, particleScale]);
 
   return (
     <canvas

@@ -2,7 +2,12 @@ import { MessageRole, Prisma } from "@/generated/prisma/client";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/lib/require-auth";
-import { buildDateContext } from "@/lib/chat-intent";
+import {
+  buildDateContext,
+  DEFAULT_CHAT_TIMEOUT_MS,
+  looksLikePresentationRequest,
+  PRESENTATION_CHAT_TIMEOUT_MS,
+} from "@/lib/chat-intent";
 import { agentFetchErrorHint, fetchAgent } from "@/lib/agent-fetch";
 import { trimChatHistory } from "@/lib/trim-chat-history";
 import { getAgentApiUrl } from "@/lib/env";
@@ -152,7 +157,12 @@ export async function POST(request: Request) {
             : null,
         }),
       },
-      { timeoutMs: 90_000, retries: 2 },
+      {
+        timeoutMs: looksLikePresentationRequest(message)
+          ? PRESENTATION_CHAT_TIMEOUT_MS
+          : DEFAULT_CHAT_TIMEOUT_MS,
+        retries: 2,
+      },
     );
   } catch (agentError) {
     const detail =

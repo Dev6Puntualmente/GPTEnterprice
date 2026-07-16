@@ -7,11 +7,23 @@ import GlassButton from "@/app/components/ui/GlassButton";
 import ParticleField from "@/app/components/ui/ParticleField";
 import { useTheme } from "@/app/components/theme/ThemeProvider";
 import type { BackgroundJob, MessageMetadata } from "@/lib/types";
+import { looksLikePresentationRequest } from "@/lib/chat-intent";
+import { ThinkingIndicator } from "@/app/components/chat/ThinkingIndicator";
 
 function looksLikeToolRequest(text: string): boolean {
   return /busca(?:r|a)|gesti[oó]n|crm\b|llamad|reporte|estad[ií]stica|poster|dashboard|tipific|flujo/i.test(
     text,
   );
+}
+
+function loadingLabelForRequest(text: string): string {
+  if (looksLikePresentationRequest(text)) {
+    return "Generando presentación (puede tardar 2–5 min)...";
+  }
+  if (looksLikeToolRequest(text)) {
+    return "Consultando datos...";
+  }
+  return "Pensando...";
 }
 
 type Message = {
@@ -58,6 +70,7 @@ export function ChatWindow({
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [loadingLabel, setLoadingLabel] = useState("Pensando...");
+  const [isPresentationActive, setIsPresentationActive] = useState(false);
   const [streamPhase, setStreamPhase] = useState<"idle" | "working" | "typing">("idle");
   const [streamingContent, setStreamingContent] = useState<string | null>(null);
   const pendingTokensRef = useRef("");
@@ -263,7 +276,8 @@ export function ChatWindow({
     setInput("");
     setLoading(true);
     setStreamPhase("working");
-    setLoadingLabel(looksLikeToolRequest(userText) ? "Consultando datos..." : "Pensando...");
+    setLoadingLabel(loadingLabelForRequest(userText));
+    setIsPresentationActive(looksLikePresentationRequest(userText));
     setStreamingContent(null);
     pendingTokensRef.current = "";
     typingStartedRef.current = false;
@@ -395,6 +409,7 @@ export function ChatWindow({
       typingStartedRef.current = false;
       pendingTokensRef.current = "";
       setLoadingLabel("Pensando...");
+      setIsPresentationActive(false);
     }
   }
 
@@ -446,7 +461,7 @@ export function ChatWindow({
         className="relative min-h-0 min-w-0 flex-1 space-y-3 overflow-x-hidden overflow-y-auto overscroll-contain px-3 py-4 sm:px-5"
         style={{ background: mode === "light" ? "transparent" : "transparent" }}
       >
-        <ParticleField density={28} />
+        <ParticleField density={28} particleScale={1.45} />
         {!conversationId && visibleMessages.length === 0 ? (
           <motion.div
             initial={{ opacity: 0, y: 12 }}
@@ -504,69 +519,11 @@ export function ChatWindow({
         ) : null}
 
         {streamPhase === "working" ? (
-          <div className="flex justify-start">
-            <div
-              className="flex max-w-md items-center gap-2.5 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm"
-              style={{
-                background: colors.surface,
-                color: colors.textMuted,
-                border: `1px solid ${colors.border}`,
-              }}
-            >
-              <span className="inline-flex gap-1" aria-hidden>
-                {[0, 1, 2].map((dot) => (
-                  <span
-                    key={dot}
-                    className="inline-block h-1.5 w-1.5 animate-pulse rounded-full"
-                    style={{
-                      background: colors.accent,
-                      animationDelay: `${dot * 180}ms`,
-                    }}
-                  />
-                ))}
-              </span>
-              <span style={{ color: colors.text }}>{loadingLabel}</span>
-            </div>
-          </div>
+          <ThinkingIndicator label={loadingLabel} presentation={isPresentationActive} />
         ) : null}
 
         {loading && streamPhase !== "working" ? (
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="relative flex justify-start"
-          >
-            <div
-              className="flex items-center gap-2 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm"
-              style={{
-                background: colors.surface,
-                color: colors.textMuted,
-                border: `1px solid ${colors.border}`,
-                boxShadow: mode === "light" ? "0 4px 16px rgba(15,23,42,0.05)" : undefined,
-              }}
-            >
-              <motion.span
-                className="flex gap-1"
-                aria-hidden
-              >
-                {[0, 1, 2].map((dot) => (
-                  <motion.span
-                    key={dot}
-                    className="inline-block h-1.5 w-1.5 rounded-full"
-                    style={{ background: colors.accent }}
-                    animate={{ y: [0, -4, 0], opacity: [0.4, 1, 0.4] }}
-                    transition={{ duration: 0.9, repeat: Infinity, delay: dot * 0.15 }}
-                  />
-                ))}
-              </motion.span>
-              <motion.span
-                animate={{ opacity: [0.5, 1, 0.5] }}
-                transition={{ duration: 1.4, repeat: Infinity }}
-              >
-                {loadingLabel}
-              </motion.span>
-            </div>
-          </motion.div>
+          <ThinkingIndicator label={loadingLabel} />
         ) : null}
       </div>
 

@@ -3,8 +3,10 @@
 import { memo } from "react";
 import { motion } from "framer-motion";
 import { BuildingFileCard } from "@/app/components/chat/BuildingFileCard";
+import { DownloadFileButton } from "@/app/components/chat/DownloadFileButton";
 import { useTheme } from "@/app/components/theme/ThemeProvider";
 import { Markdown } from "@/app/components/chat/Markdown";
+import { normalizeDownloadUrl } from "@/lib/download-url";
 import type { BackgroundJobSnapshot, MessageMetadata } from "@/lib/types";
 
 type ChatMessageBubbleProps = {
@@ -72,8 +74,10 @@ export function ChatMessageBubble({
   const { colors, mode } = useTheme();
   const isUser = role === "USER";
   const pendingJob = metadata?.pending_job;
-  const files = metadata?.files ?? [];
-  const fileUrl = jobState?.fileUrl ?? files[0] ?? null;
+  const files = (metadata?.files ?? []).map(normalizeDownloadUrl);
+  const fileUrl = jobState?.fileUrl
+    ? normalizeDownloadUrl(jobState.fileUrl)
+    : files[0] ?? null;
   const status = jobState?.status ?? metadata?.job_status ?? pendingJob?.status;
   const showJobCard = Boolean(pendingJob);
   const isTyping = isStreaming && streamPhase === "typing";
@@ -181,20 +185,7 @@ export function ChatMessageBubble({
               );
             }
             return (
-              <a
-                key={url}
-                href={url}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-3 inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium"
-                style={{
-                  background: `${colors.success}12`,
-                  color: colors.success,
-                  border: `1px solid ${colors.success}30`,
-                }}
-              >
-                Descargar archivo
-              </a>
+              <DownloadFileButton key={url} url={url} />
             );
           })}
 

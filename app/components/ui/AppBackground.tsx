@@ -43,7 +43,7 @@ export default function AppBackground() {
         transition={{ duration: 20, repeat: Infinity, ease: "easeInOut" }}
       />
 
-      <ParticleField density={mode === "light" ? 42 : 56} />
+      <ParticleField density={mode === "light" ? 42 : 56} particleScale={1.45} />
 
       {mode === "light" ? (
         <div
